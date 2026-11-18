@@ -1,5 +1,7 @@
 """Module responsible for downloading and extracting content from web articles."""
 
+from functools import lru_cache
+from typing import Optional
 from urllib.parse import urlparse
 
 import nltk
@@ -19,7 +21,7 @@ def validate_url(url: str) -> str:
 
     Raises:
         TypeError: If the URL is not a string.
-        ValueError: If the URL is empty or lacks a valid scheme/domain.
+        ValueError: If the URL is empty, contains whitespace, or lacks a valid scheme/domain.
     """
     if not isinstance(url, str):
         raise TypeError("The URL must be a string.")
@@ -28,8 +30,19 @@ def validate_url(url: str) -> str:
     if not cleaned_url:
         raise ValueError("The URL cannot be empty.")
 
-    parsed = urlparse(cleaned_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    if any(char.isspace() for char in cleaned_url):
+        raise ValueError(
+            f"Invalid URL '{cleaned_url}'. URLs cannot contain whitespace."
+        )
+
+    try:
+        parsed = urlparse(cleaned_url)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid URL '{cleaned_url}'. Must include 'http://' or 'https://' and a valid domain."
+        ) from exc
+
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError(
             f"Invalid URL '{cleaned_url}'. Must include 'http://' or 'https://' and a valid domain."
         )
@@ -37,20 +50,28 @@ def validate_url(url: str) -> str:
     return cleaned_url
 
 
+@lru_cache(maxsize=1)
 def ensure_nltk_resources() -> None:
-    """Ensure required NLTK tokenizers are downloaded for article processing."""
+    """Ensure required NLTK tokenizers are available for article processing.
+
+    Raises:
+        RuntimeError: If a required NLTK resource is missing and cannot be downloaded.
+    """
     for resource in ("punkt", "punkt_tab"):
         try:
             nltk.data.find(f"tokenizers/{resource}")
-        except LookupError:
-            nltk.download(resource, quiet=True)
+        except LookupError as exc:
+            if not nltk.download(resource, quiet=True):
+                raise RuntimeError(
+                    f"Failed to download required NLTK resource '{resource}'."
+                ) from exc
 
 
-def format_article_content(title: str, body: str) -> str:
+def format_article_content(title: Optional[str], body: str) -> str:
     """Clean and structure the extracted title and body into a single readable text.
 
     Args:
-        title: The extracted article title.
+        title: The extracted article title (may be None or empty).
         body: The extracted main text of the article.
 
     Returns:
@@ -59,7 +80,7 @@ def format_article_content(title: str, body: str) -> str:
     clean_title = " ".join(title.split()) if title else ""
     paragraphs = [
         " ".join(line.split())
-        for line in body.splitlines()
+        for line in (body or "").splitlines()
         if line.strip()
     ]
 
@@ -104,15 +125,21 @@ def extract_article(url: str) -> str:
 
     try:
         article.parse()
-        article.nlp()
-    except (ArticleException, LookupError) as exc:
+    except (ArticleException, ValueError, LookupError) as exc:
         raise RuntimeError(
-            f"Failed to parse or process the article at '{validated_url}': {exc}"
+            f"Failed to parse the article HTML at '{validated_url}': {exc}"
         ) from exc
 
     if not article.text or not article.text.strip():
         raise ValueError(
             f"No article text content could be extracted from '{validated_url}'."
         )
+
+    try:
+        article.nlp()
+    except (ArticleException, LookupError) as exc:
+        raise RuntimeError(
+            f"Failed to process natural language for the article at '{validated_url}': {exc}"
+        ) from exc
 
     return format_article_content(article.title, article.text)
