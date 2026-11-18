@@ -1,19 +1,24 @@
-"""Module responsible for converting text content into MP3 audio files."""
+"""Module responsible for converting text content into MP3 audio files using Edge TTS."""
 
-from functools import lru_cache
+import asyncio
+from contextlib import suppress
 from pathlib import Path
 import tempfile
 from typing import Optional
 
-from gtts import gTTS
-from gtts.lang import tts_langs
-from gtts.tts import gTTSError
+from aiohttp import ClientError
+import edge_tts
+from edge_tts.exceptions import EdgeTTSException
 
+SUPPORTED_VOICES: dict[str, str] = {
+    "es": "es-ES-ElviraNeural",
+    "en": "en-US-AriaNeural",
+    "fr": "fr-FR-DeniseNeural",
+}
 
-@lru_cache(maxsize=1)
-def _get_supported_languages() -> dict[str, str]:
-    """Return a cached mapping of lowercase language codes to canonical gTTS codes."""
-    return {code.lower(): code for code in tts_langs()}
+DEFAULT_LANGUAGE: str = "es"
+DEFAULT_RATE: str = "+0%"
+DEFAULT_PITCH: str = "+0Hz"
 
 
 def validate_text(text: str) -> str:
@@ -40,17 +45,17 @@ def validate_text(text: str) -> str:
 
 
 def validate_language(language: str) -> str:
-    """Validate that the language code is supported by gTTS.
+    """Validate the language code and return its corresponding Edge TTS neural voice.
 
     Args:
-        language: The language code to validate (e.g., 'es', 'en', 'zh-CN').
+        language: The language code to validate ('es', 'en', or 'fr').
 
     Returns:
-        The canonical gTTS language code.
+        The fixed Edge TTS neural voice identifier for the requested language.
 
     Raises:
         TypeError: If the language code is not a string.
-        ValueError: If the language code is empty or not supported by gTTS.
+        ValueError: If the language code is empty or not in SUPPORTED_VOICES.
     """
     if not isinstance(language, str):
         raise TypeError("The language code must be a string.")
@@ -59,14 +64,14 @@ def validate_language(language: str) -> str:
     if not cleaned_language:
         raise ValueError("The language code cannot be empty.")
 
-    supported_languages = _get_supported_languages()
-    if cleaned_language not in supported_languages:
+    if cleaned_language not in SUPPORTED_VOICES:
+        supported_list = ", ".join(f"'{code}'" for code in SUPPORTED_VOICES)
         raise ValueError(
             f"Unsupported language code '{language.strip()}'. "
-            f"Supported examples: 'es', 'en', 'fr', 'de', 'it', 'pt'."
+            f"Supported languages: {supported_list}."
         )
 
-    return supported_languages[cleaned_language]
+    return SUPPORTED_VOICES[cleaned_language]
 
 
 def prepare_output_path(output_path: str) -> Path:
@@ -109,17 +114,42 @@ def prepare_output_path(output_path: str) -> Path:
     return path.resolve()
 
 
-def text_to_speech(text: str, output_path: str, language: str = "es") -> str:
-    """Convert text into an MP3 audio file using Google Text-to-Speech (gTTS).
+async def _synthesize_audio(
+    text: str,
+    output_file: Path,
+    voice: str,
+) -> None:
+    """Synthesize speech asynchronously with Edge TTS and save to output_file.
 
-    Audio is first written to a temporary file in the target directory and
-    atomically moved to the destination only after successful synthesis,
-    preventing incomplete or corrupted MP3 files on failure.
+    Args:
+        text: Validated text content to synthesize.
+        output_file: Path to the temporary file where audio bytes will be written.
+        voice: Edge TTS neural voice identifier.
+    """
+    communicate = edge_tts.Communicate(
+        text=text,
+        voice=voice,
+        rate=DEFAULT_RATE,
+        pitch=DEFAULT_PITCH,
+    )
+    await communicate.save(str(output_file))
+
+
+def text_to_speech(
+    text: str,
+    output_path: str,
+    language: str = DEFAULT_LANGUAGE,
+) -> str:
+    """Convert text into an MP3 audio file using Microsoft Edge TTS neural voices.
+
+    Audio is synthesized into a closed temporary file in the target directory
+    and atomically moved to the destination only after verifying a non-empty MP3
+    result, preventing incomplete or corrupted files on failure.
 
     Args:
         text: The text content to convert into speech.
         output_path: Destination file path for the generated MP3 audio.
-        language: Language code for speech synthesis (default: 'es').
+        language: Language code ('es', 'en', or 'fr'; default: 'es').
 
     Returns:
         The absolute path to the generated MP3 file as a string.
@@ -127,18 +157,16 @@ def text_to_speech(text: str, output_path: str, language: str = "es") -> str:
     Raises:
         TypeError: If any argument is not of type string.
         ValueError: If text, output_path, or language have invalid values.
-        ConnectionError: If speech synthesis fails due to gTTS network or API errors.
+        ConnectionError: If speech synthesis fails due to network, timeout, or WebSocket errors.
         OSError: If creating directories or writing the MP3 file to disk fails.
-        RuntimeError: If the generated audio data is empty.
+        RuntimeError: If the generated audio file is missing or empty.
     """
     validated_text = validate_text(text)
-    validated_language = validate_language(language)
+    selected_voice = validate_language(language)
     destination = prepare_output_path(output_path)
 
     temp_path: Optional[Path] = None
     try:
-        tts = gTTS(text=validated_text, lang=validated_language, slow=False)
-
         with tempfile.NamedTemporaryFile(
             mode="wb",
             dir=destination.parent,
@@ -147,25 +175,38 @@ def text_to_speech(text: str, output_path: str, language: str = "es") -> str:
             delete=False,
         ) as temp_file:
             temp_path = Path(temp_file.name)
-            tts.write_to_fp(temp_file)
-            temp_file.flush()
 
-        if temp_path.stat().st_size == 0:
+        asyncio.run(
+            _synthesize_audio(
+                text=validated_text,
+                output_file=temp_path,
+                voice=selected_voice,
+            )
+        )
+
+        if not temp_path.is_file() or temp_path.stat().st_size == 0:
             raise RuntimeError(
                 f"Audio synthesis produced an empty file for '{destination}'."
             )
 
         temp_path.replace(destination)
-    except gTTSError as exc:
+    except (
+        EdgeTTSException,
+        ClientError,
+        asyncio.TimeoutError,
+        TimeoutError,
+        ConnectionError,
+    ) as exc:
         raise ConnectionError(
-            f"Failed to synthesize audio with gTTS for language '{validated_language}': {exc}"
+            f"Failed to synthesize audio with Edge TTS using voice '{selected_voice}': {exc}"
         ) from exc
     except OSError as exc:
         raise OSError(
             f"Failed to write the MP3 file at '{destination}': {exc}"
         ) from exc
     finally:
-        if temp_path is not None and temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+        if temp_path is not None:
+            with suppress(OSError):
+                temp_path.unlink(missing_ok=True)
 
     return str(destination)

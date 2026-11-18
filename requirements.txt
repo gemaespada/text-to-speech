@@ -1,4 +1,4 @@
 newspaper3k
 nltk
-gTTS
-
+edge-tts
+aiohttp
