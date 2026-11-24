@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated audio files and local NLTK data
+output/*.mp3
+.nltk_data/

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: text-to-speech-api
+    runtime: python
+    plan: free
+    buildCommand: >-
+      pip install --upgrade pip &&
+      pip install -r requirements.txt &&
+      python -m nltk.downloader -d /opt/render/project/src/.nltk_data punkt punkt_tab
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: NLTK_DATA
+        value: /opt/render/project/src/.nltk_data
+      - key: FRONTEND_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173
+      - key: MAX_ARTICLE_CHARS
+        value: "15000"
+      - key: RATE_LIMIT_REQUESTS
+        value: "5"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_RATE_LIMIT_IPS
+        value: "10000"
+      - key: TRUST_PROXY_HEADERS
+        value: "false"
