@@ -4,11 +4,22 @@ function ConversionForm({
   language,
   onLanguageChange,
   languages = [],
+  isLoadingLanguages = false,
+  languagesError = "",
   isLoading,
   onSubmit,
 }) {
+  const areLanguagesReady =
+    !isLoadingLanguages && !languagesError && languages.length > 0 && Boolean(language);
+
+  const isSelectDisabled = isLoading || !areLanguagesReady;
+  const isSubmitDisabled = isLoading || !areLanguagesReady || !url.trim();
+
   const handleSubmit = (event) => {
     event.preventDefault();
+    if (isSubmitDisabled) {
+      return;
+    }
     onSubmit();
   };
 
@@ -39,15 +50,27 @@ function ConversionForm({
           <select
             id="article-language"
             className="form-select"
-            value={language}
+            value={areLanguagesReady ? language : ""}
             onChange={(event) => onLanguageChange(event.target.value)}
-            disabled={isLoading || languages.length === 0}
+            disabled={isSelectDisabled}
+            aria-busy={isLoadingLanguages}
+            aria-invalid={Boolean(languagesError) || undefined}
           >
-            {languages.map((item) => (
-              <option key={item.code} value={item.code}>
-                {item.name} ({item.code.toUpperCase()}) — {item.voice}
-              </option>
-            ))}
+            {isLoadingLanguages && (
+              <option value="">Cargando idiomas disponibles...</option>
+            )}
+
+            {!isLoadingLanguages && (languagesError || languages.length === 0) && (
+              <option value="">No se han podido cargar los idiomas</option>
+            )}
+
+            {!isLoadingLanguages &&
+              !languagesError &&
+              languages.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.name} ({item.code.toUpperCase()}) — {item.voice}
+                </option>
+              ))}
           </select>
         </div>
 
@@ -55,7 +78,7 @@ function ConversionForm({
           <button
             type="submit"
             className="btn-primary"
-            disabled={isLoading || !url.trim()}
+            disabled={isSubmitDisabled}
           >
             {isLoading ? (
               <>
@@ -83,6 +106,23 @@ function ConversionForm({
           </button>
         </div>
       </div>
+
+      {isLoadingLanguages && (
+        <div
+          className="field-feedback field-feedback-loading"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="spinner spinner-dark spinner-sm" aria-hidden="true" />
+          <span>Cargando idiomas disponibles...</span>
+        </div>
+      )}
+
+      {!isLoadingLanguages && languagesError && (
+        <div className="field-feedback field-feedback-error" role="alert">
+          <span>{languagesError}</span>
+        </div>
+      )}
     </form>
   );
 }

@@ -30,13 +30,7 @@ function AudioResultCard({ result }) {
   };
 
   const displayDuration = detectedDuration || result.durationLabel || null;
-
-  const isWav =
-    result.mimeType === "audio/wav" ||
-    Boolean(result.filename && result.filename.toLowerCase().endsWith(".wav"));
-  const formatLabel = result.formatLabel || (isWav ? "WAV" : "MP3");
-  const defaultFilename = isWav ? "article.wav" : "article.mp3";
-  const downloadFilename = result.filename || defaultFilename;
+  const downloadFilename = result.filename || "article.mp3";
 
   return (
     <section className="result-card" aria-label="Resultado de audio generado">
@@ -105,7 +99,7 @@ function AudioResultCard({ result }) {
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
-          <span>Descargar {formatLabel}</span>
+          <span>Descargar MP3</span>
         </a>
       </div>
     </section>

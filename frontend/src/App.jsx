@@ -5,29 +5,14 @@ import ConversionForm from "./components/ConversionForm";
 import StatusBanner from "./components/StatusBanner";
 import AudioResultCard from "./components/AudioResultCard";
 
-const SAMPLE_LANGUAGES = [
-  {
-    code: "es",
-    name: "Español",
-    voice: "es-ES-ElviraNeural",
-  },
-  {
-    code: "en",
-    name: "English",
-    voice: "en-US-AriaNeural",
-  },
-  {
-    code: "fr",
-    name: "Français",
-    voice: "fr-FR-DeniseNeural",
-  },
-];
-
-const SAMPLE_URL =
-  "https://www.infobae.com/america/agencias/2026/03/23/lady-gaga-anuncia-su-regreso-a-los-escenarios/";
-
-const SAMPLE_ERROR_MESSAGE =
-  "No ha sido posible extraer el contenido del artículo. Verifica que el enlace sea público y corresponda a una noticia o entrada de blog válida.";
+const FALLBACK_STATUS_MESSAGES = {
+  400: "La petición o la URL proporcionada no es válida. Asegúrate de que sea un artículo público con texto legible.",
+  413: "El artículo o la página web supera el tamaño máximo permitido para la conversión.",
+  422: "Los datos enviados no son válidos. Revisa el formato de la URL y el idioma seleccionado.",
+  429: "Se ha alcanzado el límite de peticiones permitidas por minuto. Espera unos segundos antes de intentarlo de nuevo.",
+  502: "No ha sido posible descargar el artículo o conectar con el servicio externo de síntesis de voz.",
+  500: "Se ha producido un error interno en el servidor al generar el archivo de audio.",
+};
 
 /**
  * Valida una URL en el cliente utilizando el constructor nativo new URL().
@@ -78,75 +63,73 @@ function validateArticleUrl(rawUrl) {
   }
 }
 
-/**
- * Genera en memoria un clip de audio WAV suave de 2 segundos para poder
- * probar el reproductor y el botón de descarga con datos de ejemplo,
- * sin realizar peticiones al backend ni añadir binarios al repositorio.
- */
-function createDemoAudioBlobUrl() {
-  const sampleRate = 22050;
-  const durationSeconds = 2;
-  const numSamples = sampleRate * durationSeconds;
-  const buffer = new ArrayBuffer(44 + numSamples * 2);
-  const view = new DataView(buffer);
-
-  const writeString = (offset, text) => {
-    for (let i = 0; i < text.length; i += 1) {
-      view.setUint8(offset + i, text.charCodeAt(i));
-    }
-  };
-
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + numSamples * 2, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeString(36, "data");
-  view.setUint32(40, numSamples * 2, true);
-
-  for (let i = 0; i < numSamples; i += 1) {
-    const t = i / sampleRate;
-    const envelope = Math.sin((Math.PI * t) / durationSeconds);
-    const wave =
-      0.5 * Math.sin(2 * Math.PI * 440 * t) +
-      0.35 * Math.sin(2 * Math.PI * 554.37 * t) +
-      0.25 * Math.sin(2 * Math.PI * 659.25 * t);
-    const sample = Math.max(-1, Math.min(1, wave * envelope * 0.25));
-    view.setInt16(44 + i * 2, sample * 32767, true);
+function extractHostnameLabel(articleUrl) {
+  try {
+    const { hostname } = new URL(articleUrl);
+    return hostname.replace(/^www\./i, "") || "articulo";
+  } catch {
+    return "articulo";
   }
-
-  const blob = new Blob([buffer], { type: "audio/wav" });
-  return URL.createObjectURL(blob);
 }
 
-function buildDemoResultSnapshot(sourceUrl, languageItem, audioUrl) {
-  return {
-    title: "Artículo convertido a audio (Audio WAV de demostración)",
-    sourceUrl,
-    languageName: languageItem.name,
-    voice: languageItem.voice,
-    formatLabel: "WAV",
-    mimeType: "audio/wav",
-    filename: `articulo-demo-${languageItem.code}.wav`,
-    audioUrl,
-  };
+function buildDownloadFilename(articleUrl, languageCode) {
+  const hostSlug = extractHostnameLabel(articleUrl)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const safeHost = hostSlug || "articulo";
+  return `article-${safeHost}-${languageCode}.mp3`;
+}
+
+/**
+ * Interpreta los errores HTTP devueltos por FastAPI en POST /api/tts.
+ * Extrae el campo `detail` del cuerpo JSON cuando está disponible y lo
+ * presenta de forma comprensible sin exponer trazas internas.
+ */
+async function extractTtsErrorMessage(response) {
+  const statusFallback =
+    FALLBACK_STATUS_MESSAGES[response.status] ||
+    "No se ha podido completar la conversión de audio. Inténtalo de nuevo.";
+
+  try {
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      return statusFallback;
+    }
+
+    const payload = await response.json();
+
+    if (typeof payload?.detail === "string" && payload.detail.trim()) {
+      return `${statusFallback} (${payload.detail.trim()})`;
+    }
+
+    if (Array.isArray(payload?.detail) && payload.detail.length > 0) {
+      const firstEntry = payload.detail[0];
+      if (typeof firstEntry?.msg === "string" && firstEntry.msg.trim()) {
+        const cleanMsg = firstEntry.msg.replace(/^Value error,\s*/i, "").trim();
+        return `${statusFallback} (${cleanMsg})`;
+      }
+    }
+  } catch {
+    // Si la respuesta no contiene JSON válido, se utiliza el mensaje asociado al código HTTP.
+  }
+
+  return statusFallback;
 }
 
 function App() {
-  const [url, setUrl] = useState(SAMPLE_URL);
-  const [language, setLanguage] = useState("es");
-  const [status, setStatus] = useState("success");
+  const [url, setUrl] = useState("");
+  const [languages, setLanguages] = useState([]);
+  const [language, setLanguage] = useState("");
+  const [isLoadingLanguages, setIsLoadingLanguages] = useState(true);
+  const [languagesError, setLanguagesError] = useState("");
+
+  const [status, setStatus] = useState("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [result, setResult] = useState(null);
 
-  const timerRef = useRef(null);
   const activeAudioUrlRef = useRef(null);
+  const ttsAbortControllerRef = useRef(null);
 
   /**
    * Sustituye de forma segura el Object URL de audio activo, revocando
@@ -161,29 +144,94 @@ function App() {
   };
 
   useEffect(() => {
-    const initialAudioUrl = createDemoAudioBlobUrl();
-    replaceAudioObjectUrl(initialAudioUrl);
-    setResult(
-      buildDemoResultSnapshot(SAMPLE_URL, SAMPLE_LANGUAGES[0], initialAudioUrl)
-    );
-
     return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
+      if (ttsAbortControllerRef.current) {
+        ttsAbortControllerRef.current.abort();
+        ttsAbortControllerRef.current = null;
       }
       replaceAudioObjectUrl(null);
     };
   }, []);
 
-  const clearPendingTimer = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
+  useEffect(() => {
+    const controller = new AbortController();
 
-  const handleSimulatedSubmit = () => {
-    clearPendingTimer();
+    async function loadLanguages() {
+      setIsLoadingLanguages(true);
+      setLanguagesError("");
+
+      try {
+        const response = await fetch("/api/languages", {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Error HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const receivedLanguages = Array.isArray(data?.languages)
+          ? data.languages.filter(
+              (item) =>
+                item &&
+                typeof item.code === "string" &&
+                typeof item.name === "string" &&
+                typeof item.voice === "string"
+            )
+          : [];
+
+        if (receivedLanguages.length === 0) {
+          throw new Error("La respuesta no contiene idiomas válidos.");
+        }
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const initialLanguageCode =
+          typeof data.default === "string" &&
+          receivedLanguages.some((item) => item.code === data.default)
+            ? data.default
+            : receivedLanguages[0].code;
+
+        setLanguages(receivedLanguages);
+        setLanguage(initialLanguageCode);
+        setIsLoadingLanguages(false);
+      } catch (error) {
+        if (controller.signal.aborted || error?.name === "AbortError") {
+          return;
+        }
+
+        setLanguages([]);
+        setLanguage("");
+        setLanguagesError(
+          "No se han podido cargar los idiomas disponibles. Comprueba que el servidor backend esté activo."
+        );
+        setIsLoadingLanguages(false);
+      }
+    }
+
+    loadLanguages();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  const handleConvertSubmit = async () => {
+    if (
+      status === "loading" ||
+      isLoadingLanguages ||
+      languagesError ||
+      languages.length === 0 ||
+      !language
+    ) {
+      return;
+    }
 
     const validation = validateArticleUrl(url);
     if (!validation.isValid) {
@@ -194,52 +242,91 @@ function App() {
 
     const submittedUrl = validation.normalizedUrl;
     const submittedLanguage =
-      SAMPLE_LANGUAGES.find((item) => item.code === language) ||
-      SAMPLE_LANGUAGES[0];
+      languages.find((item) => item.code === language) || languages[0];
+
+    if (ttsAbortControllerRef.current) {
+      ttsAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    ttsAbortControllerRef.current = controller;
 
     setErrorMessage("");
     setStatus("loading");
 
-    timerRef.current = setTimeout(() => {
-      const nextAudioUrl = createDemoAudioBlobUrl();
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          url: submittedUrl,
+          language: submittedLanguage.code,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const apiErrorMessage = await extractTtsErrorMessage(response);
+        if (controller.signal.aborted) {
+          return;
+        }
+        setErrorMessage(apiErrorMessage);
+        setStatus("error");
+        return;
+      }
+
+      const contentTypeHeader = (
+        response.headers.get("content-type") || ""
+      ).toLowerCase();
+      const audioBlob = await response.blob();
+
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      const blobMimeType = (audioBlob.type || "").toLowerCase();
+      const isMp3Audio =
+        contentTypeHeader.includes("audio/mpeg") ||
+        blobMimeType.includes("audio/mpeg");
+
+      if (!isMp3Audio || audioBlob.size === 0) {
+        setErrorMessage(
+          "La respuesta recibida del servidor no contiene un archivo de audio MP3 válido."
+        );
+        setStatus("error");
+        return;
+      }
+
+      const nextAudioUrl = URL.createObjectURL(audioBlob);
       replaceAudioObjectUrl(nextAudioUrl);
 
-      setResult(
-        buildDemoResultSnapshot(
-          submittedUrl,
-          submittedLanguage,
-          nextAudioUrl
-        )
-      );
+      const hostLabel = extractHostnameLabel(submittedUrl);
+      setResult({
+        title: `Artículo convertido · ${hostLabel}`,
+        sourceUrl: submittedUrl,
+        languageCode: submittedLanguage.code,
+        languageName: submittedLanguage.name,
+        voice: submittedLanguage.voice,
+        filename: buildDownloadFilename(submittedUrl, submittedLanguage.code),
+        audioUrl: nextAudioUrl,
+      });
       setStatus("success");
-    }, 900);
-  };
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === "AbortError") {
+        return;
+      }
 
-  const handlePreviewStateChange = (nextStatus) => {
-    clearPendingTimer();
-
-    if (nextStatus === "error") {
-      setErrorMessage(SAMPLE_ERROR_MESSAGE);
-    } else {
-      setErrorMessage("");
-    }
-
-    if (nextStatus === "success" && !result) {
-      const fallbackLanguage =
-        SAMPLE_LANGUAGES.find((item) => item.code === language) ||
-        SAMPLE_LANGUAGES[0];
-      const nextAudioUrl = createDemoAudioBlobUrl();
-      replaceAudioObjectUrl(nextAudioUrl);
-      setResult(
-        buildDemoResultSnapshot(
-          url.trim() || SAMPLE_URL,
-          fallbackLanguage,
-          nextAudioUrl
-        )
+      setErrorMessage(
+        "No se ha podido establecer conexión con el servidor para generar el audio. Comprueba que el backend esté activo."
       );
+      setStatus("error");
+    } finally {
+      if (ttsAbortControllerRef.current === controller) {
+        ttsAbortControllerRef.current = null;
+      }
     }
-
-    setStatus(nextStatus);
   };
 
   return (
@@ -256,9 +343,11 @@ function App() {
               onUrlChange={setUrl}
               language={language}
               onLanguageChange={setLanguage}
-              languages={SAMPLE_LANGUAGES}
+              languages={languages}
+              isLoadingLanguages={isLoadingLanguages}
+              languagesError={languagesError}
               isLoading={status === "loading"}
-              onSubmit={handleSimulatedSubmit}
+              onSubmit={handleConvertSubmit}
             />
 
             <StatusBanner
@@ -268,50 +357,7 @@ function App() {
             />
           </div>
 
-          {status === "success" && <AudioResultCard result={result} />}
-
-          <section
-            className="preview-toolbar"
-            aria-label="Selector de estados de vista previa"
-          >
-            <div className="preview-toolbar-header">
-              <span className="preview-dot" aria-hidden="true" />
-              <span className="preview-label">
-                Modo diseño (datos de ejemplo): previsualizar estados de la
-                interfaz
-              </span>
-            </div>
-            <div className="preview-actions">
-              <button
-                type="button"
-                className={`preview-btn ${status === "idle" ? "active" : ""}`}
-                onClick={() => handlePreviewStateChange("idle")}
-              >
-                Inicial
-              </button>
-              <button
-                type="button"
-                className={`preview-btn ${status === "loading" ? "active" : ""}`}
-                onClick={() => handlePreviewStateChange("loading")}
-              >
-                Cargando
-              </button>
-              <button
-                type="button"
-                className={`preview-btn ${status === "success" ? "active" : ""}`}
-                onClick={() => handlePreviewStateChange("success")}
-              >
-                Completado
-              </button>
-              <button
-                type="button"
-                className={`preview-btn ${status === "error" ? "active" : ""}`}
-                onClick={() => handlePreviewStateChange("error")}
-              >
-                Error
-              </button>
-            </div>
-          </section>
+          {result && <AudioResultCard result={result} />}
         </div>
       </main>
 

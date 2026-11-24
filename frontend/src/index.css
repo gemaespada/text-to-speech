@@ -267,8 +267,7 @@ body {
 
 .btn-primary:focus-visible,
 .btn-download:focus-visible,
-.status-close-btn:focus-visible,
-.preview-btn:focus-visible {
+.status-close-btn:focus-visible {
   outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
@@ -291,6 +290,33 @@ body {
   height: 20px;
   border-color: rgba(37, 99, 235, 0.22);
   border-top-color: var(--accent-brand);
+}
+
+.spinner-sm {
+  width: 14px;
+  height: 14px;
+}
+
+.field-feedback {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.84rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+
+.field-feedback-loading {
+  color: var(--text-secondary);
+  background-color: var(--bg-subtle);
+  border-color: var(--border-light);
+}
+
+.field-feedback-error {
+  color: var(--status-error-text);
+  background-color: var(--status-error-bg);
+  border-color: var(--status-error-border);
 }
 
 @keyframes spin {
@@ -486,70 +512,6 @@ body {
   border-color: #93c5fd;
 }
 
-/* Barra discreta de previsualización de estados (Datos de ejemplo) */
-.preview-toolbar {
-  margin-top: 0.35rem;
-  padding: 0.85rem 1.1rem;
-  background-color: rgba(241, 245, 249, 0.8);
-  border: 1px dashed var(--border-input);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.preview-toolbar-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.preview-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--accent-brand);
-}
-
-.preview-label {
-  font-size: 0.8rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.preview-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.preview-btn {
-  padding: 0.32rem 0.7rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--text-secondary);
-  background-color: #ffffff;
-  border: 1px solid var(--border-input);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.preview-btn:hover {
-  border-color: var(--text-secondary);
-  color: var(--text-primary);
-}
-
-.preview-btn.active {
-  background-color: var(--accent-primary);
-  border-color: var(--accent-primary);
-  color: #ffffff;
-}
-
 /* Pie de página */
 .site-footer {
   border-top: 1px solid var(--border-light);
@@ -607,11 +569,6 @@ body {
 
   .btn-download {
     width: 100%;
-  }
-
-  .preview-toolbar {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 
