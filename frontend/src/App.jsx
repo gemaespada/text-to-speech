@@ -5,6 +5,23 @@ import ConversionForm from "./components/ConversionForm";
 import StatusBanner from "./components/StatusBanner";
 import AudioResultCard from "./components/AudioResultCard";
 
+const RAW_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = RAW_API_BASE_URL.trim()
+  .replace(/\/+$/, "")
+  .replace(/\/api$/i, "");
+
+/**
+ * Construye la URL completa del endpoint de la API utilizando VITE_API_BASE_URL
+ * en producción, o manteniendo la ruta relativa `/api/...` en desarrollo local
+ * para aprovechar el proxy de Vite.
+ */
+function buildApiUrl(endpointPath) {
+  const normalizedPath = endpointPath.startsWith("/")
+    ? endpointPath
+    : `/${endpointPath}`;
+  return API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : normalizedPath;
+}
+
 const FALLBACK_STATUS_MESSAGES = {
   400: "La petición o la URL proporcionada no es válida. Asegúrate de que sea un artículo público con texto legible.",
   413: "El artículo o la página web supera el tamaño máximo permitido para la conversión.",
@@ -161,7 +178,7 @@ function App() {
       setLanguagesError("");
 
       try {
-        const response = await fetch("/api/languages", {
+        const response = await fetch(buildApiUrl("/api/languages"), {
           method: "GET",
           headers: {
             Accept: "application/json",
@@ -254,7 +271,7 @@ function App() {
     setStatus("loading");
 
     try {
-      const response = await fetch("/api/tts", {
+      const response = await fetch(buildApiUrl("/api/tts"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
