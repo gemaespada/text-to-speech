@@ -61,7 +61,14 @@ from src.extractor import ensure_nltk_resources, extract_article, prepare_nltk_r
 
 logger = logging.getLogger("tts_backend")
 
-DEFAULT_FRONTEND_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+PRODUCTION_FRONTEND_ORIGIN = "https://text-to-speech-3ir.pages.dev"
+LOCAL_FRONTEND_ORIGINS: tuple[str, ...] = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+DEFAULT_FRONTEND_ORIGINS = ",".join(
+    (PRODUCTION_FRONTEND_ORIGIN, *LOCAL_FRONTEND_ORIGINS)
+)
 TEMP_DIR_PREFIX = "tts_req_"
 LOCK_FILENAME = ".active.lock"
 LIFECYCLE_COORD_LOCK_FILENAME = ".tts_req_lifecycle.lock"
@@ -72,10 +79,39 @@ _STALE_CLEANUP_LOCK = threading.Lock()
 _LAST_STALE_CLEANUP: Optional[float] = None
 
 
-def get_allowed_origins() -> list[str]:
-    """Parse allowed CORS origins from FRONTEND_ORIGINS environment variable."""
-    raw_origins = os.getenv("FRONTEND_ORIGINS", DEFAULT_FRONTEND_ORIGINS)
-    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+def normalize_origin(origin: str) -> str:
+    """Normalize a CORS origin string to canonical 'scheme://host[:port]' without trailing slash."""
+    cleaned = origin.strip().strip("'\"").strip().rstrip("/")
+    if not cleaned or cleaned == "*":
+        return ""
+    try:
+        parsed = urlparse(cleaned)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    except ValueError:
+        return ""
+    return ""
+
+
+def get_allowed_origins(raw_origins: Optional[str] = None) -> list[str]:
+    """Parse and normalize allowed CORS origins from FRONTEND_ORIGINS and baseline defaults."""
+    env_value = (
+        raw_origins
+        if raw_origins is not None
+        else os.getenv("FRONTEND_ORIGINS", DEFAULT_FRONTEND_ORIGINS)
+    )
+    combined_tokens = [
+        *DEFAULT_FRONTEND_ORIGINS.split(","),
+        *env_value.replace(";", ",").split(","),
+    ]
+    origins: list[str] = []
+    seen: set[str] = set()
+    for token in combined_tokens:
+        normalized = normalize_origin(token)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            origins.append(normalized)
+    return origins
 
 
 def extract_safe_hostname(url: str) -> str:

@@ -15,7 +15,7 @@ services:
       - key: NLTK_DATA
         value: /opt/render/project/src/.nltk_data
       - key: FRONTEND_ORIGINS
-        value: http://localhost:5173,http://127.0.0.1:5173
+        value: https://text-to-speech-3ir.pages.dev,http://localhost:5173,http://127.0.0.1:5173
       - key: MAX_ARTICLE_CHARS
         value: "15000"
       - key: RATE_LIMIT_REQUESTS

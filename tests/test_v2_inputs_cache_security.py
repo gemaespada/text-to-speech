@@ -626,3 +626,152 @@ def test_frontend_three_input_modes_and_render_cold_start_contracts():
     assert '"/api/tts/text"' in app_jsx
     assert '"/api/tts/file"' in app_jsx
 
+
+# =============================================================================
+# 5. CORS & Cloudflare Pages Production Origin Tests
+# =============================================================================
+
+
+def _run_full_asgi_request(
+    method: str,
+    path: str,
+    headers: list[tuple[bytes, bytes]],
+    body: bytes = b"",
+) -> tuple[int, dict[str, str], bytes]:
+    """Execute an HTTP request through the full FastAPI + CORSMiddleware ASGI stack."""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "https",
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": b"",
+        "headers": headers,
+        "client": ("203.0.113.77", 54321),
+        "server": ("text-to-speech-api-yfia.onrender.com", 443),
+    }
+    sent_events: list[dict] = []
+    body_consumed = False
+
+    async def receive() -> dict:
+        nonlocal body_consumed
+        if not body_consumed:
+            body_consumed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        sent_events.append(message)
+
+    asyncio.run(backend_main.app(scope, receive, send))
+
+    start_msg = next(m for m in sent_events if m["type"] == "http.response.start")
+    status_code = start_msg["status"]
+    resp_headers = {
+        k.decode("latin-1").lower(): v.decode("latin-1")
+        for k, v in start_msg.get("headers", [])
+    }
+    resp_body = b"".join(
+        m.get("body", b"") for m in sent_events if m["type"] == "http.response.body"
+    )
+    return status_code, resp_headers, resp_body
+
+
+def test_cors_origin_normalization_and_default_cloudflare_inclusion():
+    """Verify origin parsing strips trailing slashes/spaces/quotes and includes Cloudflare Pages origin."""
+    assert (
+        backend_main.normalize_origin("  https://text-to-speech-3ir.pages.dev/  ")
+        == "https://text-to-speech-3ir.pages.dev"
+    )
+    assert (
+        backend_main.normalize_origin("'https://TEXT-TO-SPEECH-3IR.pages.dev///'")
+        == "https://text-to-speech-3ir.pages.dev"
+    )
+    assert backend_main.normalize_origin("*") == ""
+
+    # Even if FRONTEND_ORIGINS in Render only contains localhost, the production Cloudflare origin is included
+    origins = backend_main.get_allowed_origins(
+        "http://localhost:5173/, http://127.0.0.1:5173/ , https://custom.pages.dev/ "
+    )
+    assert "https://text-to-speech-3ir.pages.dev" in origins
+    assert "http://localhost:5173" in origins
+    assert "http://127.0.0.1:5173" in origins
+    assert "https://custom.pages.dev" in origins
+    assert "*" not in origins
+    assert all(not o.endswith("/") for o in origins)
+
+
+def test_cors_cloudflare_origin_get_post_and_options_preflight(
+    reset_state_and_sandbox: Path,
+):
+    """Reproduce exact Cloudflare Pages origin on GET /api/languages, OPTIONS preflight, and POST /api/tts."""
+    cf_origin = b"https://text-to-speech-3ir.pages.dev"
+
+    # 1. GET /api/languages from Cloudflare Pages origin
+    status_get, headers_get, _ = _run_full_asgi_request(
+        method="GET",
+        path="/api/languages",
+        headers=[
+            (b"origin", cf_origin),
+            (b"accept", b"application/json"),
+        ],
+    )
+    assert status_get == 200
+    assert headers_get.get("access-control-allow-origin") == "https://text-to-speech-3ir.pages.dev"
+    assert "access-control-allow-credentials" not in headers_get
+
+    # 2. OPTIONS /api/tts preflight from Cloudflare Pages origin
+    status_opt, headers_opt, _ = _run_full_asgi_request(
+        method="OPTIONS",
+        path="/api/tts",
+        headers=[
+            (b"origin", cf_origin),
+            (b"access-control-request-method", b"POST"),
+            (b"access-control-request-headers", b"content-type, accept"),
+        ],
+    )
+    assert status_opt == 200
+    assert headers_opt.get("access-control-allow-origin") == "https://text-to-speech-3ir.pages.dev"
+    allow_methods = headers_opt.get("access-control-allow-methods", "")
+    assert "GET" in allow_methods and "POST" in allow_methods and "OPTIONS" in allow_methods
+    assert "access-control-allow-credentials" not in headers_opt
+
+    # 3. POST /api/tts/text from Cloudflare Pages origin
+    orig_create = backend_main.create_locked_temp_dir
+
+    def sandboxed_create():
+        return orig_create(temp_root=reset_state_and_sandbox)
+
+    def fake_tts(text: str, output_path: str, language: str = "es") -> str:
+        Path(output_path).write_bytes(b"MP3-CORS-OK")
+        return output_path
+
+    with patch("backend.main.create_locked_temp_dir", side_effect=sandboxed_create), \
+         patch("backend.main.text_to_speech", side_effect=fake_tts):
+        status_post, headers_post, body_post = _run_full_asgi_request(
+            method="POST",
+            path="/api/tts/text",
+            headers=[
+                (b"origin", cf_origin),
+                (b"content-type", b"application/json"),
+                (b"accept", b"audio/mpeg"),
+            ],
+            body=b'{"text":"Hola desde Cloudflare Pages","engine":"edge","language":"es"}',
+        )
+
+    assert status_post == 200
+    assert headers_post.get("access-control-allow-origin") == "https://text-to-speech-3ir.pages.dev"
+    assert body_post == b"MP3-CORS-OK"
+
+    # 4. Unauthorized external origin must NOT receive Access-Control-Allow-Origin
+    status_bad, headers_bad, _ = _run_full_asgi_request(
+        method="GET",
+        path="/api/languages",
+        headers=[(b"origin", b"https://untrusted-site.example.com")],
+    )
+    assert status_bad == 200
+    assert "access-control-allow-origin" not in headers_bad
+
+
