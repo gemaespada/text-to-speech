@@ -1,8 +1,16 @@
 """Pydantic schemas for request validation and API responses."""
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Optional
 
-from src.converter import DEFAULT_LANGUAGE, SUPPORTED_VOICES
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.converter import (
+    DEFAULT_ENGINE,
+    DEFAULT_LANGUAGE,
+    SUPPORTED_VOICES,
+    validate_engine,
+    validate_engine_voice,
+)
 from src.extractor import validate_url
 
 LANGUAGE_NAMES: dict[str, str] = {
@@ -32,6 +40,14 @@ class TTSRequest(BaseModel):
         default=DEFAULT_LANGUAGE,
         description="Language code for speech synthesis ('es', 'en', or 'fr').",
     )
+    engine: str = Field(
+        default=DEFAULT_ENGINE,
+        description="Speech synthesis engine ('edge' or 'elevenlabs').",
+    )
+    voice: Optional[str] = Field(
+        default=None,
+        description="Optional voice identifier compatible with the selected engine and language.",
+    )
 
     @field_validator("url")
     @classmethod
@@ -51,6 +67,25 @@ class TTSRequest(BaseModel):
             )
         return cleaned
 
+    @field_validator("engine")
+    @classmethod
+    def validate_engine_code(cls, value: str) -> str:
+        """Ensure the synthesis engine is supported ('edge' or 'elevenlabs')."""
+        return validate_engine(value)
+
+    @model_validator(mode="after")
+    def validate_voice_compatibility(self) -> "TTSRequest":
+        """Ensure any provided voice identifier is valid for the selected engine and language."""
+        if self.voice is not None and not self.voice.strip():
+            self.voice = None
+        if self.voice is not None:
+            self.voice = validate_engine_voice(
+                engine=self.engine,
+                language=self.language,
+                voice=self.voice,
+            )
+        return self
+
 
 class HealthResponse(BaseModel):
     """Response schema for the health check endpoint."""
@@ -66,8 +101,42 @@ class LanguageItem(BaseModel):
     voice: str
 
 
+class VoiceOption(BaseModel):
+    """Metadata for a single selectable voice within an engine and language."""
+
+    id: str
+    name: str
+    language: str
+    engine: str
+
+
+class EngineLanguageVoices(BaseModel):
+    """Language entry and its compatible voices for a specific TTS engine."""
+
+    code: str
+    name: str
+    default_voice: str
+    voices: list[VoiceOption]
+
+
+class EngineCatalog(BaseModel):
+    """Metadata and available languages/voices for a speech synthesis engine."""
+
+    id: str
+    name: str
+    description: str
+    configured: bool
+    requires_api_key: bool
+    model_id: Optional[str] = None
+    quota_notice: Optional[str] = None
+    default_language: str
+    languages: list[EngineLanguageVoices]
+
+
 class LanguagesResponse(BaseModel):
-    """Response schema listing all supported synthesis languages."""
+    """Response schema listing all supported synthesis languages and engine catalogs."""
 
     default: str
     languages: list[LanguageItem]
+    default_engine: str = DEFAULT_ENGINE
+    engines: list[EngineCatalog] = Field(default_factory=list)

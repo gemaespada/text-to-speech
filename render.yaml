@@ -26,3 +26,5 @@ services:
         value: "10000"
       - key: TRUST_PROXY_HEADERS
         value: "false"
+      - key: ELEVENLABS_API_KEY
+        sync: false

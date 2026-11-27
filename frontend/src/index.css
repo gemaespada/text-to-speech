@@ -217,19 +217,47 @@ body {
   cursor: not-allowed;
 }
 
-.form-row {
+.selectors-grid {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
   align-items: end;
 }
 
-.language-group {
+.selector-group {
   min-width: 0;
 }
 
-.form-submit-wrapper {
+.quota-notice {
   display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.85rem 1rem;
+  background-color: var(--accent-brand-soft);
+  border: 1px solid var(--accent-brand-border);
+  border-radius: var(--radius-md);
+  color: var(--accent-primary);
+}
+
+.quota-notice-icon {
+  color: var(--accent-brand);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.1rem;
+  flex-shrink: 0;
+}
+
+.quota-notice-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.form-submit-row {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .btn-primary {
@@ -267,7 +295,8 @@ body {
 
 .btn-primary:focus-visible,
 .btn-download:focus-visible,
-.status-close-btn:focus-visible {
+.status-close-btn:focus-visible,
+.btn-switch-engine:focus-visible {
   outline: 2px solid var(--accent-brand);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
@@ -378,6 +407,28 @@ body {
   margin: 0.2rem 0 0;
   font-size: 0.85rem;
   opacity: 0.9;
+}
+
+.status-actions {
+  margin-top: 0.65rem;
+}
+
+.btn-switch-engine {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--status-error-text);
+  background-color: #ffffff;
+  border: 1px solid var(--status-error-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-switch-engine:hover {
+  background-color: #fff1f2;
+  border-color: #fca5a5;
 }
 
 .status-close-btn {
@@ -545,8 +596,12 @@ body {
     padding: 1.25rem;
   }
 
-  .form-row {
+  .selectors-grid {
     grid-template-columns: 1fr;
+  }
+
+  .form-submit-row {
+    width: 100%;
   }
 
   .btn-primary {

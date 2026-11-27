@@ -8,139 +8,148 @@
 
 ### 1. Project Overview
 
-**Text to Speech** is a Python application developed and tested with **Python 3.9.6** that converts online web articles into playable MP3 audio files using neural speech synthesis. By providing the URL of an article, the application downloads and extracts its main text content, processes it using natural language processing techniques, and synthesizes it into spoken audio via `edge-tts`.
+**Text to Speech (v2)** is a full-stack web application and CLI tool built with **Python (FastAPI)** and **React + Vite** that converts online web articles into playable and downloadable MP3 audio files using neural speech synthesis. By providing the URL of an article, the application downloads and extracts its main text content safely, processes it using natural language processing techniques, and synthesizes it into spoken audio using your choice of **two speech synthesis engines**:
 
-> **Current Status:** Core article extraction, neural speech synthesis, and interactive CLI workflow are implemented and operational. An active Internet connection is required both to download the web article and to communicate with Microsoft's speech synthesis service.
+- **Edge TTS (`edge`):** Free, key-less neural speech synthesis powered by Microsoft Edge TTS.
+- **ElevenLabs (`elevenlabs`):** Expressive multilingual neural synthesis powered by the official ElevenLabs REST API using the **`eleven_v4`** model (`mp3_44100_128`).
 
 ---
 
 ### 2. Project Objectives
 
-- Automate the extraction of clean, readable text from online articles via their URL.
+- Automate the safe extraction of clean, readable text from online articles via their URL (with SSRF protection, DNS pinning, and size limits).
 - Process and prepare extracted text for natural-sounding speech synthesis.
-- Convert processed article text into portable MP3 audio files using predefined neural voices.
-- Provide a simple, modular, and easy-to-use Python workflow.
+- Support two complementary neural TTS engines (**Edge TTS** and **ElevenLabs `eleven_v4`**) with dynamic selection of **Engine**, **Language**, and **Voice**.
+- Guarantee atomic MP3 generation and race-free temporary file cleanup even on errors or client disconnections.
 
 ---
 
-### 3. Main Features
+### 3. Main Features & Speech Engines
 
 | Feature | Description | Status |
 | :--- | :--- | :--- |
-| **Web Article Extraction** | Download and parse the title and main body of a web article from a given URL. | Implemented |
-| **Text Processing** | Clean and tokenize extracted text using Natural Language Processing (NLP) to ensure smooth audio reading. | Implemented |
-| **Language-Based Neural Synthesis** | Select among Spanish (`es`), English (`en`), or French (`fr`), automatically mapping each language to a predefined neural voice. | Implemented |
-| **Safe MP3 File Generation** | Write synthesized audio to a temporary file in the target directory, verify that the generated file exists and is not empty (`> 0 bytes`), and atomically replace the destination `.mp3` file. | Implemented |
+| **Web Article Extraction** | Download and parse the title and main body of a web article from a public HTTP/HTTPS URL (up to 5 MB HTML and 15,000 characters). | Implemented |
+| **Dual Neural TTS Engines** | Choose between **Edge TTS** (free alternative) and **ElevenLabs** (`eleven_v4` REST API). | Implemented |
+| **Dynamic Engine, Language & Voice Selection** | Three synchronized selectors in the React UI (**Engine → Language → Voice**) backed by `GET /api/languages`. | Implemented |
+| **Safe MP3 Generation & Temp Cleanup** | Atomic temporary file writing and `SafeFileResponse` streaming with POSIX `fcntl.flock` locks. | Implemented |
+| **Graceful Error Handling & Manual Fallback** | Specific error detection for ElevenLabs (missing/invalid API key, quota exhaustion, rate limits, timeouts) with an option to manually switch to Edge TTS while preserving previous results. | Implemented |
 
-#### How Neural Voice Selection Works
+#### Comparison: Edge TTS vs. ElevenLabs (`eleven_v4`)
 
-- **Internet Requirement:** Speech generation requires an active Internet connection because `edge-tts` communicates online with Microsoft's speech services.
-- **Automatic Voice Mapping:** The user only chooses the language code (`es`, `en`, or `fr`). The neural voice is fixed and assigned automatically via an internal dictionary; users cannot manually select or customize individual voices.
-- **Internal Prosody Defaults:** Speech speed (`rate = "+0%"`) and voice tone (`pitch = "+0Hz"`) use fixed internal defaults and are not configurable from the user interface.
-
-| Language Code | Language | Predefined Neural Voice |
+| Aspect | Edge TTS (`edge`) | ElevenLabs (`elevenlabs`) |
 | :--- | :--- | :--- |
-| `es` *(default)* | Spanish (Spain) | `es-ES-ElviraNeural` |
-| `en` | English (US) | `en-US-AriaNeural` |
-| `fr` | French (France) | `fr-FR-DeniseNeural` |
+| **Cost & Quota** | Free, no API key or account required. | Limited Free Tier (**10,000 monthly credits**); each conversion consumes credits based on text length. |
+| **Model** | Microsoft Edge Neural TTS | **`eleven_v4`** (supports up to 100,000 chars per request; project limit kept at 15,000 chars). |
+| **Audio Format** | MP3 (`audio/mpeg`) | MP3 `mp3_44100_128` (44.1 kHz, 128 kbps). |
+| **Supported Languages** | Spanish (`es`), English (`en`), French (`fr`) | Spanish (`es`), English (`en`), French (`fr`) via `language_code`. |
+| **Available Voices** | Language-specific neural voices (`ElviraNeural`, `AlvaroNeural`, `AriaNeural`, `GuyNeural`, `DeniseNeural`, `HenriNeural`). | Official multilingual premade voices (`Sarah`, `Alice`, `Laura`, `Matilda`, `Roger`, `George`, `Liam`, `Charlie`), verified dynamically by the backend. |
+
+#### ElevenLabs Free Quota Notice
+
+When **ElevenLabs** is selected in the web interface, a visible notice informs the user:
+> *"ElevenLabs uses a limited free quota of 10,000 monthly credits. Each conversion consumes credits according to the length of the text. When the quota is exhausted, you can continue using Edge TTS at no cost."*
 
 ---
 
 ### 4. Technologies and Tools
 
-The project has been developed and tested with **Python 3.9.6** and uses the following libraries:
-
 | Technology / Library | Role in the Project |
 | :--- | :--- |
-| **Python 3.9.6** | Programming language and tested runtime environment. |
-| **newspaper3k** | Web scraping and article extraction (downloading HTML and parsing clean article text). |
-| **NLTK** | Natural Language Toolkit used for text preprocessing and tokenization required by the article parser. |
-| **edge-tts** | Asynchronous neural text-to-speech engine that communicates with Microsoft's speech services to generate MP3 audio. |
-| **aiohttp** | Asynchronous HTTP/WebSocket transport library used by `edge-tts` and imported directly in `src/converter.py` to handle network transport exceptions (`ClientError`). |
+| **Python 3.9+ / 3.11** | Backend programming language and runtime environment. |
+| **FastAPI & Uvicorn** | REST API (`GET /api/health`, `GET /api/languages`, `POST /api/tts`) and ASGI server. |
+| **React 18 & Vite 8** | Responsive frontend user interface with pure CSS and dynamic selectors. |
+| **newspaper3k & NLTK** | Article HTML parsing and natural language tokenization (`punkt`, `punkt_tab`). |
+| **edge-tts & aiohttp** | Microsoft Edge neural text-to-speech engine. |
+| **requests** | HTTP client used for SSRF-protected article downloads and official ElevenLabs REST API calls. |
 
 ---
 
 ### 5. Project Structure
 
-Directory and file layout:
-
 ```text
 text-to-speech/
+├── backend/
+│   ├── main.py           # FastAPI application, endpoints, CORS, and temp file lifecycle
+│   ├── schemas.py        # Pydantic models for requests, engines, languages, and voices
+│   └── security.py       # SSRF exports, 15,000-char limit, IP resolution, and rate limiting
+├── frontend/
+│   ├── src/
+│   │   ├── components/   # Header, HeroSection, ConversionForm, StatusBanner, AudioResultCard
+│   │   ├── App.jsx       # State management, dynamic catalog synchronization, and API calls
+│   │   ├── index.css     # Pure CSS responsive styles
+│   │   └── main.jsx      # React entry point
+│   ├── package.json
+│   └── vite.config.js    # Vite configuration and local /api proxy
 ├── src/
-│   ├── __init__.py
-│   ├── extractor.py      # Article downloading and text extraction (newspaper3k + NLTK)
-│   ├── converter.py      # Neural text-to-speech conversion and safe MP3 writing (edge-tts + aiohttp)
-│   └── main.py           # Application entry point and interactive CLI workflow
-├── output/               # Generated MP3 audio files
-├── requirements.txt      # Project dependencies
+│   ├── extractor.py      # SSRF-safe article downloading and text extraction
+│   ├── converter.py      # Dual-engine TTS conversion (Edge TTS + ElevenLabs eleven_v4)
+│   └── main.py           # Interactive CLI entry point
+├── tests/
+│   ├── test_temp_lifecycle.py   # 14 tests for temp file lifecycle, disconnect cleanup, and ports
+│   └── test_dual_engine_tts.py  # 10 tests for Edge TTS + ElevenLabs integration and error handling
+├── .env.example          # Backend environment variable template
+├── render.yaml           # Render deployment blueprint
+├── requirements.txt      # Python dependencies
 └── README.md             # Project documentation (EN / ES)
 ```
 
 ---
 
-### 6. Installation and Setup
+### 6. Installation, API Key Configuration & Local Setup
 
-> **Requirement:** Python **3.9.6** and an active Internet connection.
-
-1. **Clone the repository:**
+1. **Clone the repository and create a virtual environment:**
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/gemaespada/text-to-speech.git
    cd text-to-speech
-   ```
-
-2. **Create and activate a virtual environment:**
-
-   - **Create the virtual environment:**
-     ```bash
-     python3 -m venv .venv
-     ```
-   - **Activate on macOS / Linux:**
-     ```bash
-     source .venv/bin/activate
-     ```
-   - **Activate on Windows (CMD):**
-     ```cmd
-     .venv\Scripts\activate.bat
-     ```
-   - **Activate on Windows (PowerShell):**
-     ```powershell
-     .venv\Scripts\Activate.ps1
-     ```
-
-3. **Install dependencies:**
-
-   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
-4. **NLTK resources:**
-   Required tokenizers (`punkt` and `punkt_tab`) are automatically checked and downloaded on first run if missing.
+2. **Configure `ELEVENLABS_API_KEY` locally (`.env`):**
 
----
+   The project includes a local `.env` file (ignored by Git via `.gitignore`) derived from `.env.example`. To enable ElevenLabs locally, open `.env` and set your private key:
 
-### 7. Usage
-
-1. Run the application as a Python module from the project root directory:
-
-   ```bash
-   python -m src.main
+   ```dotenv
+   ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
    ```
 
-2. Provide the following inputs when prompted in the terminal:
-   - **Article URL:** Full `http://` or `https://` web address of the article.
-   - **Output MP3 path:** Destination path ending in `.mp3` (press `Enter` to use the default `output/article.mp3`).
-   - **Language code:** `es`, `en`, or `fr` (press `Enter` to use the default `es`).
-3. The application extracts the article text, synthesizes the speech into a temporary file, verifies that the file exists and is non-empty, and saves the final `.mp3` file at the target path.
+   - **Security rule:** Never hardcode `ELEVENLABS_API_KEY` in source files, frontend code, or commits.
+   - If `ELEVENLABS_API_KEY` is left empty, the application starts normally and **Edge TTS** remains fully functional.
+
+3. **Run the FastAPI backend and React frontend locally:**
+
+   - **Backend (Terminal 1):**
+     ```bash
+     ./.venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+     ```
+   - **Frontend (Terminal 2):**
+     ```bash
+     cd frontend
+     npm install
+     npm run dev
+     ```
+   - Open `http://localhost:5173/` in your browser.
 
 ---
 
-### 8. Future Improvements
+### 7. Deployment Configuration (Render & Cloudflare Pages)
 
-- **Command-Line Arguments (CLI Flags):** Pass the URL, target language, and output filename directly via terminal flags without interactive prompts.
-- **Speech Speed and Pitch Adjustment:** Allow optional adjustment of speech speed (`rate`) and tone (`pitch`) while keeping automatic, fixed voice assignment per language *(not currently implemented)*.
-- **Graphical User Interface (GUI) or Web UI:** Provide a visual interface for pasting URLs and playing generated audio directly.
-- **Batch Processing:** Convert multiple article URLs from a text file in a single run.
+- **Render (Backend):**
+  - `render.yaml` declares `ELEVENLABS_API_KEY` with `sync: false` so the secret is never stored in the repository.
+  - In the Render Dashboard (**Service → Environment**), add the secret value for `ELEVENLABS_API_KEY` and include your Cloudflare Pages domain in `FRONTEND_ORIGINS`.
+- **Cloudflare Pages (Frontend):**
+  - Set `VITE_API_BASE_URL` to your Render backend URL (e.g., `https://text-to-speech-api-yfia.onrender.com`).
+
+---
+
+### 8. Known Limitations
+
+1. **Article Size Limits:** For security and cost control, raw HTML downloads are capped at **5 MB** (`MAX_HTML_BYTES`) and extracted article text is capped at **15,000 characters** (`MAX_ARTICLE_CHARS`).
+2. **ElevenLabs Free Tier Quota:** The ElevenLabs Free plan provides 10,000 monthly credits (~10,000 characters). Long articles can quickly consume the monthly free quota; when exhausted, users can switch to **Edge TTS** with one click.
+3. **ElevenLabs Free Tier on Cloud Datacenter IPs:** ElevenLabs may restrict Free Tier API requests originating from shared cloud hosting IPs (such as Render) with an `unusual_activity` / `401`/`403` response. Using ElevenLabs from a cloud server typically requires a paid ElevenLabs plan, while **Edge TTS** works without restrictions.
+4. **Community Voice Library Restriction on Free Tier:** ElevenLabs restricts community Voice Library voices to paid API tiers (`HTTP 402`). This project uses official default premade voices (`Sarah`, `Alice`, `Laura`, `Matilda`, `Roger`, `George`, `Liam`, `Charlie`) that are compatible with all tiers.
 
 ---
 ---
@@ -149,136 +158,151 @@ text-to-speech/
 
 ### 1. Descripción del proyecto
 
-**Text to Speech** es una aplicación en Python desarrollada y probada con **Python 3.9.6** que convierte artículos publicados en páginas web en archivos de audio reproducibles en formato MP3 mediante síntesis de voz neuronal. A partir de la URL de un artículo, la aplicación descarga y extrae su contenido textual principal, lo procesa mediante técnicas de procesamiento del lenguaje natural y lo transforma en voz utilizando `edge-tts`.
+**Text to Speech (v2)** es una aplicación web *full-stack* y herramienta CLI desarrollada con **Python (FastAPI)** y **React + Vite** que convierte artículos web en archivos de audio MP3 reproducibles y descargables mediante síntesis de voz neuronal. A partir de la URL de un artículo, la aplicación descarga y extrae su contenido textual principal de forma segura, lo procesa con técnicas de lenguaje natural y lo sintetiza permitiendo elegir entre **dos motores de generación de voz**:
 
-> **Estado actual:** La extracción de artículos, la síntesis de voz neuronal y el flujo interactivo por terminal están implementados y operativos. Se requiere conexión activa a Internet tanto para descargar el artículo web como para comunicarse con los servicios de síntesis de voz de Microsoft.
+- **Edge TTS (`edge`):** Motor neuronal gratuito que no requiere clave API, basado en Microsoft Edge TTS.
+- **ElevenLabs (`elevenlabs`):** Motor neuronal expresivo multilingüe conectado a la API REST oficial de ElevenLabs utilizando el modelo **`eleven_v4`** (`mp3_44100_128`).
 
 ---
 
 ### 2. Objetivos
 
-- Automatizar la extracción de texto limpio y legible a partir de la URL de un artículo web.
-- Procesar y preparar el texto extraído para obtener una lectura fluida.
-- Convertir el contenido textual procesado en archivos de audio MP3 portables mediante voces neuronales predefinidas.
-- Ofrecer un flujo de trabajo en Python sencillo, modular y fácil de utilizar.
+- Automatizar la extracción segura de texto limpio y legible a partir de la URL de un artículo web (con protección SSRF, validación de puertos/IPs y límites de tamaño).
+- Ofrecer dos motores complementarios (**Edge TTS** y **ElevenLabs `eleven_v4`**) con selección dinámica de **Motor**, **Idioma** y **Voz**.
+- Garantizar la generación atómica de archivos MP3 y la limpieza segura de directorios temporales incluso ante errores o desconexiones del cliente.
+- Mantener la aplicación operativa con Edge TTS aunque ElevenLabs no esté configurado o haya agotado su cuota.
 
 ---
 
-### 3. Funcionalidades principales
+### 3. Funcionalidades principales y motores de voz
 
 | Funcionalidad | Descripción | Estado |
 | :--- | :--- | :--- |
-| **Extracción de artículos web** | Descarga y análisis del título y cuerpo principal de un artículo a partir de su URL. | Implementada |
-| **Procesamiento de texto** | Limpieza y tokenización del texto mediante procesamiento del lenguaje natural (NLP) para facilitar su lectura. | Implementada |
-| **Síntesis neuronal por idioma** | Selección entre español (`es`), inglés (`en`) o francés (`fr`), asignando automáticamente una voz neuronal fija a cada idioma. | Implementada |
-| **Generación segura de archivos MP3** | Escritura del audio en un archivo temporal en el directorio de destino, comprobación de que el archivo generado existe y no está vacío (`> 0 bytes`), y sustitución atómica del archivo `.mp3` final. | Implementada |
+| **Extracción segura de artículos web** | Descarga y análisis del título y cuerpo principal de un artículo público HTTP/HTTPS (hasta 5 MB de HTML y 15.000 caracteres). | Implementada |
+| **Doble motor de síntesis neuronal** | Elección entre **Edge TTS** (alternativa gratuita) y **ElevenLabs** (API REST oficial con modelo `eleven_v4`). | Implementada |
+| **Selección dinámica de Motor, Idioma y Voz** | Tres selectores sincronizados en React (**Motor → Idioma → Voz**) alimentados desde `GET /api/languages`. | Implementada |
+| **Generación segura de MP3 y limpieza temporal** | Escritura atómica en archivo temporal y transmisión con `SafeFileResponse` y bloqueos POSIX `fcntl.flock`. | Implementada |
+| **Gestión específica de errores y cambio manual** | Detección de clave ausente/inválida, cuota agotada, límite de peticiones, *timeouts* y errores de red en ElevenLabs, ofreciendo cambiar manualmente a Edge TTS sin perder el resultado anterior. | Implementada |
 
-#### Funcionamiento de la selección de voz neuronal
+#### Comparativa entre Edge TTS y ElevenLabs (`eleven_v4`)
 
-- **Requisito de conexión a Internet:** La generación de audio requiere conexión a Internet, ya que `edge-tts` se comunica en línea con los servicios de voz de Microsoft.
-- **Asignación automática de voz:** El usuario únicamente elige el código de idioma (`es`, `en` o `fr`). La voz neuronal se asigna automáticamente mediante un diccionario interno; no existe opción para que el usuario seleccione o personalice la voz.
-- **Velocidad y tono internos:** La velocidad (`rate = "+0%"`) y el tono (`pitch = "+0Hz"`) utilizan valores predeterminados internos y no son configurables desde la interfaz de usuario.
-
-| Código de idioma | Idioma | Voz neuronal predefinida |
+| Característica | Edge TTS (`edge`) | ElevenLabs (`elevenlabs`) |
 | :--- | :--- | :--- |
-| `es` *(por defecto)* | Español (España) | `es-ES-ElviraNeural` |
-| `en` | Inglés (EE. UU.) | `en-US-AriaNeural` |
-| `fr` | Francés (Francia) | `fr-FR-DeniseNeural` |
+| **Coste y cuota** | Gratuito, sin registro ni clave API. | Cuota gratuita limitada (**10.000 créditos mensuales**); cada conversión consume créditos según la longitud del texto. |
+| **Modelo** | Microsoft Edge Neural TTS | **`eleven_v4`** (admite hasta 100.000 caracteres por petición; se mantiene el límite del proyecto en 15.000 caracteres). |
+| **Formato de salida** | MP3 (`audio/mpeg`) | MP3 `mp3_44100_128` (44.1 kHz, 128 kbps). |
+| **Idiomas disponibles** | Español (`es`), Inglés (`en`), Francés (`fr`) | Español (`es`), Inglés (`en`), Francés (`fr`) mediante `language_code`. |
+| **Voces disponibles** | Voces neuronales específicas por idioma (`ElviraNeural`, `AlvaroNeural`, `AriaNeural`, `GuyNeural`, `DeniseNeural`, `HenriNeural`). | Voces predefinidas oficiales multilingües (`Sarah`, `Alice`, `Laura`, `Matilda`, `Roger`, `George`, `Liam`, `Charlie`), comprobadas desde el backend. |
+
+#### Aviso sobre la cuota gratuita de ElevenLabs
+
+Cuando el usuario selecciona **ElevenLabs** en la interfaz, se muestra automáticamente el siguiente aviso informativo (que desaparece al seleccionar **Edge TTS**):
+> *«ElevenLabs utiliza una cuota gratuita limitada de 10.000 créditos mensuales. Cada conversión consume créditos según la longitud del texto. Cuando se agote la cuota, podrás seguir utilizando Edge TTS sin coste».*
 
 ---
 
 ### 4. Tecnologías y herramientas
 
-El proyecto se ha desarrollado y probado con **Python 3.9.6** y utiliza las siguientes bibliotecas:
-
 | Tecnología / Biblioteca | Función en el proyecto |
 | :--- | :--- |
-| **Python 3.9.6** | Lenguaje de programación y versión del entorno en el que se ha desarrollado y probado el proyecto. |
-| **newspaper3k** | Acceso a artículos web, descarga del contenido y extracción del texto principal. |
-| **NLTK** | Procesamiento del lenguaje natural (preprocesamiento y tokenización de texto requeridos en el análisis del artículo). |
-| **edge-tts** | Motor asíncrono de síntesis de voz neuronal que se conecta a los servicios de voz de Microsoft para generar archivos MP3. |
-| **aiohttp** | Biblioteca de transporte asíncrono HTTP/WebSocket utilizada por `edge-tts` e importada directamente en `src/converter.py` para gestionar excepciones de red (`ClientError`). |
+| **Python 3.9+ / 3.11** | Lenguaje del backend y entorno de ejecución. |
+| **FastAPI & Uvicorn** | API REST (`GET /api/health`, `GET /api/languages`, `POST /api/tts`) y servidor ASGI. |
+| **React 18 & Vite 8** | Interfaz web minimalista y *responsive* en CSS puro con tres selectores dinámicos. |
+| **newspaper3k & NLTK** | Extracción del artículo y tokenización de lenguaje natural (`punkt`, `punkt_tab`). |
+| **edge-tts & aiohttp** | Motor asíncrono de síntesis neuronal con Microsoft Edge TTS. |
+| **requests** | Cliente HTTP utilizado para la descarga protegida contra SSRF y las llamadas a la API REST de ElevenLabs. |
 
 ---
 
 ### 5. Estructura del proyecto
 
-Organización de carpetas y archivos:
-
 ```text
 text-to-speech/
+├── backend/
+│   ├── main.py           # Aplicación FastAPI, endpoints, CORS y ciclo de vida de archivos temporales
+│   ├── schemas.py        # Esquemas Pydantic de peticiones, motores, idiomas y voces
+│   └── security.py       # Protección SSRF, límite de 15.000 caracteres, IP y rate limiting
+├── frontend/
+│   ├── src/
+│   │   ├── components/   # Header, HeroSection, ConversionForm, StatusBanner, AudioResultCard
+│   │   ├── App.jsx       # Gestión de estado, sincronización de selectores y llamadas a la API
+│   │   ├── index.css     # Hoja de estilos responsive en CSS puro
+│   │   └── main.jsx      # Punto de entrada de React
+│   ├── package.json
+│   └── vite.config.js    # Configuración de Vite y proxy local /api
 ├── src/
-│   ├── __init__.py
-│   ├── extractor.py      # Descarga del artículo y extracción de texto (newspaper3k + NLTK)
-│   ├── converter.py      # Conversión neuronal a voz y escritura segura de MP3 (edge-tts + aiohttp)
-│   └── main.py           # Punto de entrada de la aplicación y flujo interactivo CLI
-├── output/               # Archivos de audio MP3 generados
-├── requirements.txt      # Dependencias del proyecto
+│   ├── extractor.py      # Descarga segura del artículo y extracción de texto
+│   ├── converter.py      # Conversión dual a voz (Edge TTS + ElevenLabs eleven_v4)
+│   └── main.py           # Punto de entrada interactivo por línea de comandos (CLI)
+├── tests/
+│   ├── test_temp_lifecycle.py   # 14 pruebas de ciclo de vida temporal, desconexión y puertos
+│   └── test_dual_engine_tts.py  # 10 pruebas de integración dual Edge TTS + ElevenLabs y errores
+├── .env.example          # Plantilla de variables de entorno del backend
+├── render.yaml           # Configuración de despliegue en Render
+├── requirements.txt      # Dependencias de Python
 └── README.md             # Documentación del proyecto (EN / ES)
 ```
 
 ---
 
-### 6. Instalación y configuración
+### 6. Instalación, configuración de la API Key y uso local
 
-> **Requisito:** Python **3.9.6** y conexión activa a Internet.
-
-1. **Clonar el repositorio:**
+1. **Clonar el repositorio y preparar el entorno virtual:**
 
    ```bash
-   git clone <url-del-repositorio>
+   git clone https://github.com/gemaespada/text-to-speech.git
    cd text-to-speech
-   ```
-
-2. **Crear y activar un entorno virtual:**
-
-   - **Crear el entorno virtual:**
-     ```bash
-     python3 -m venv .venv
-     ```
-   - **Activar en macOS / Linux:**
-     ```bash
-     source .venv/bin/activate
-     ```
-   - **Activar en Windows (CMD):**
-     ```cmd
-     .venv\Scripts\activate.bat
-     ```
-   - **Activar en Windows (PowerShell):**
-     ```powershell
-     .venv\Scripts\Activate.ps1
-     ```
-
-3. **Instalar las dependencias:**
-
-   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
-4. **Recursos de NLTK:**
-   Los tokenizadores necesarios (`punkt` y `punkt_tab`) se comprueban y descargan automáticamente en la primera ejecución si no están presentes.
+2. **Configurar `ELEVENLABS_API_KEY` en local (`.env`):**
 
----
+   El proyecto cuenta con un archivo `.env` local (ignorado por Git en `.gitignore`). Para utilizar ElevenLabs en local, abre el archivo `.env` en tu editor e introduce tu clave privada directamente:
 
-### 7. Uso
-
-1. Ejecutar la aplicación como módulo de Python desde el directorio raíz del proyecto:
-
-   ```bash
-   python -m src.main
+   ```dotenv
+   ELEVENLABS_API_KEY=tu_clave_de_elevenlabs_aqui
    ```
 
-2. Introducir los siguientes datos cuando la terminal lo solicite:
-   - **URL del artículo:** Dirección web completa (`http://` o `https://`) del artículo.
-   - **Ruta de salida MP3:** Ruta de destino terminada en `.mp3` (pulsar `Enter` para usar el valor por defecto `output/article.mp3`).
-   - **Código de idioma:** `es`, `en` o `fr` (pulsar `Enter` para usar el valor por defecto `es`).
-3. La aplicación extraerá el texto del artículo, sintetizará la voz en un archivo temporal, comprobará que el archivo generado exista y no esté vacío, y guardará el archivo `.mp3` definitivo en la ruta indicada.
+   - **Seguridad:** La clave se lee exclusivamente desde la variable de entorno `ELEVENLABS_API_KEY` en el backend. Nunca se expone en el frontend, ni en logs, ni en mensajes de error, ni en GitHub.
+   - Si `ELEVENLABS_API_KEY` se deja vacía, la aplicación sigue funcionando con **Edge TTS** con total normalidad.
+
+3. **Ejecutar el backend y el frontend en local:**
+
+   - **Backend FastAPI (Terminal 1):**
+     ```bash
+     ./.venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+     ```
+   - **Frontend React + Vite (Terminal 2):**
+     ```bash
+     cd frontend
+     npm install
+     npm run dev
+     ```
+   - Accede a `http://localhost:5173/` en el navegador.
+
+4. **Ejecutar las pruebas automatizadas:**
+
+   ```bash
+   ./.venv/bin/python -m unittest -v tests/test_temp_lifecycle.py tests/test_dual_engine_tts.py
+   ```
 
 ---
 
-### 8. Mejoras futuras
+### 7. Configuración en Render y Cloudflare Pages
 
-- **Argumentos por línea de comandos (CLI Flags):** Permitir indicar la URL, el idioma y el nombre del archivo de salida directamente como parámetros en la terminal sin preguntas interactivas.
-- **Ajuste de velocidad y tono:** Permitir el ajuste opcional de la velocidad (`rate`) y el tono (`pitch`) manteniendo siempre la asignación fija y automática de voz según el idioma *(actualmente no implementado)*.
-- **Interfaz gráfica (GUI) o Web:** Incorporar una interfaz visual para pegar enlaces y reproducir el audio generado directamente.
-- **Procesamiento por lotes:** Convertir múltiples URLs almacenadas en un archivo de texto en una sola ejecución.
+- **En Render (Backend):**
+  - El archivo `render.yaml` declara la variable `ELEVENLABS_API_KEY` con `sync: false` para que su valor nunca se almacene en el repositorio.
+  - En el panel de Render (**Dashboard → Servicio `text-to-speech-api` → Environment**), añade manualmente el valor secreto de `ELEVENLABS_API_KEY` y asegúrate de que `FRONTEND_ORIGINS` incluya el dominio de Cloudflare Pages.
+- **En Cloudflare Pages (Frontend):**
+  - Configura `VITE_API_BASE_URL` apuntando a la URL pública del servicio en Render (`https://text-to-speech-api-yfia.onrender.com`).
+
+---
+
+### 8. Limitaciones conocidas
+
+1. **Límite de tamaño por artículo:** Por seguridad y control de consumo, la descarga HTML está limitada a **5 MB** (`MAX_HTML_BYTES`) y el texto extraído a **15.000 caracteres** (`MAX_ARTICLE_CHARS`).
+2. **Cuota gratuita mensual de ElevenLabs:** El plan gratuito de ElevenLabs dispone de 10.000 créditos mensuales (~10.000 caracteres). Cuando se agote la cuota o si un artículo supera los créditos restantes, la interfaz mostrará un aviso claro y un botón para cambiar manualmente a **Edge TTS** sin perder el audio anterior.
+3. **Restricción del plan gratuito de ElevenLabs en IPs de servidores Cloud:** ElevenLabs puede restringir el uso del plan gratuito cuando las peticiones proceden de direcciones IP compartidas de centros de datos como Render (`detected_unusual_activity`). Para usar ElevenLabs desde un servidor en la nube suele requerirse un plan de pago en ElevenLabs, mientras que en ejecución local y con **Edge TTS** funciona sin coste.
+4. **Voces de la librería comunitaria en cuentas gratuitas:** La API de ElevenLabs solo permite utilizar en el plan gratuito las voces predefinidas oficiales (*default premade voices*). Por ello el proyecto utiliza exclusivamente identificadores oficiales de voces predefinidas (`Sarah`, `Alice`, `Laura`, `Matilda`, `Roger`, `George`, `Liam`, `Charlie`).

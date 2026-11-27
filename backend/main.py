@@ -19,6 +19,7 @@ from starlette.background import BackgroundTask
 from starlette.types import Receive, Scope, Send
 
 from backend.schemas import (
+    EngineCatalog,
     HealthResponse,
     LanguageItem,
     LanguagesResponse,
@@ -36,7 +37,14 @@ from backend.security import (
     validate_article_length,
     validate_security_config,
 )
-from src.converter import DEFAULT_LANGUAGE, SUPPORTED_VOICES, text_to_speech
+from src.converter import (
+    DEFAULT_ENGINE,
+    DEFAULT_LANGUAGE,
+    ElevenLabsError,
+    SUPPORTED_VOICES,
+    get_engines_catalog,
+    text_to_speech,
+)
 from src.extractor import ensure_nltk_resources, extract_article, prepare_nltk_resources
 
 logger = logging.getLogger("tts_backend")
@@ -282,7 +290,7 @@ def health_check() -> HealthResponse:
 
 @app.get("/api/languages", response_model=LanguagesResponse, tags=["TTS"])
 def list_languages() -> LanguagesResponse:
-    """Return the list of supported synthesis languages and their assigned neural voices."""
+    """Return the list of supported synthesis languages, engines, and their assigned neural voices."""
     items = [
         LanguageItem(
             code=code,
@@ -291,7 +299,16 @@ def list_languages() -> LanguagesResponse:
         )
         for code, voice in SUPPORTED_VOICES.items()
     ]
-    return LanguagesResponse(default=DEFAULT_LANGUAGE, languages=items)
+    engines = [
+        EngineCatalog(**engine_data)
+        for engine_data in get_engines_catalog(LANGUAGE_NAMES)
+    ]
+    return LanguagesResponse(
+        default=DEFAULT_LANGUAGE,
+        languages=items,
+        default_engine=DEFAULT_ENGINE,
+        engines=engines,
+    )
 
 
 @app.post(
@@ -335,11 +352,22 @@ def convert_article_to_mp3(payload: TTSRequest, request: Request) -> FileRespons
         cleanup_once = make_once_cleanup(temp_dir, lock_file)
         temp_mp3_path = temp_dir / "article.mp3"
 
-        saved_path = text_to_speech(
-            text=article_text,
-            output_path=str(temp_mp3_path),
-            language=payload.language,
-        )
+        if payload.engine == DEFAULT_ENGINE and (
+            payload.voice is None or payload.voice == SUPPORTED_VOICES.get(payload.language)
+        ):
+            saved_path = text_to_speech(
+                text=article_text,
+                output_path=str(temp_mp3_path),
+                language=payload.language,
+            )
+        else:
+            saved_path = text_to_speech(
+                text=article_text,
+                output_path=str(temp_mp3_path),
+                language=payload.language,
+                engine=payload.engine,
+                voice=payload.voice,
+            )
 
         response = SafeFileResponse(
             path=saved_path,
@@ -350,6 +378,17 @@ def convert_article_to_mp3(payload: TTSRequest, request: Request) -> FileRespons
         )
         ownership_transferred = True
         return response
+    except ElevenLabsError as exc:
+        logger.warning(
+            "ElevenLabs synthesis error for host '%s' (code=%s, status=%d)",
+            safe_host,
+            exc.error_code,
+            exc.status_code,
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.user_message,
+        ) from exc
     except HTMLTooLargeError as exc:
         logger.warning(
             "HTML size limit exceeded for host '%s' (%s)",

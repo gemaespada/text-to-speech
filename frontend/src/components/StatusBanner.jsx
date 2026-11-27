@@ -1,14 +1,25 @@
-function StatusBanner({ status, errorMessage, onDismissError }) {
+function StatusBanner({
+  status,
+  errorMessage,
+  onDismissError,
+  onSwitchToEdge,
+}) {
   if (status === "idle") {
     return null;
   }
 
   if (status === "loading") {
     return (
-      <div className="status-banner status-loading" role="status" aria-live="polite">
+      <div
+        className="status-banner status-loading"
+        role="status"
+        aria-live="polite"
+      >
         <span className="spinner spinner-dark" aria-hidden="true" />
         <div className="status-content">
-          <p className="status-title">Procesando artículo y generando voz neuronal...</p>
+          <p className="status-title">
+            Procesando artículo y generando voz neuronal...
+          </p>
           <p className="status-subtitle">
             Estamos extrayendo el texto principal y sintetizando el archivo MP3.
           </p>
@@ -39,8 +50,20 @@ function StatusBanner({ status, errorMessage, onDismissError }) {
         <div className="status-content">
           <p className="status-title">No se pudo completar la conversión</p>
           <p className="status-subtitle">
-            {errorMessage || "Comprueba que la URL del artículo sea pública y vuelve a intentarlo."}
+            {errorMessage ||
+              "Comprueba que la URL del artículo sea pública y vuelve a intentarlo."}
           </p>
+          {onSwitchToEdge && (
+            <div className="status-actions">
+              <button
+                type="button"
+                className="btn-switch-engine"
+                onClick={onSwitchToEdge}
+              >
+                Cambiar a Edge TTS (Gratuito)
+              </button>
+            </div>
+          )}
         </div>
         {onDismissError && (
           <button
@@ -58,7 +81,11 @@ function StatusBanner({ status, errorMessage, onDismissError }) {
 
   if (status === "success") {
     return (
-      <div className="status-banner status-success" role="status" aria-live="polite">
+      <div
+        className="status-banner status-success"
+        role="status"
+        aria-live="polite"
+      >
         <div className="status-icon" aria-hidden="true">
           <svg
             width="20"

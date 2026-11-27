@@ -36,7 +36,11 @@ function AudioResultCard({ result }) {
     <section className="result-card" aria-label="Resultado de audio generado">
       <div className="result-header">
         <div className="result-info">
-          <span className="result-tag">{result.languageName}</span>
+          <span className="result-tag">
+            {result.engineName
+              ? `${result.engineName} · ${result.languageName}`
+              : result.languageName}
+          </span>
           <h2 className="result-title">{result.title}</h2>
           <p className="result-source" title={result.sourceUrl}>
             {result.sourceUrl}
@@ -78,7 +82,9 @@ function AudioResultCard({ result }) {
       </div>
 
       <div className="result-actions">
-        <span className="voice-meta">Voz neuronal: {result.voice}</span>
+        <span className="voice-meta">
+          Voz neuronal: {result.voiceName || result.voice}
+        </span>
         <a
           href={result.audioUrl}
           download={downloadFilename}
