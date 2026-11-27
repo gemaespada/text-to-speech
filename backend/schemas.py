@@ -87,6 +87,71 @@ class TTSRequest(BaseModel):
         return self
 
 
+class TextTTSRequest(BaseModel):
+    """Request payload for converting manually pasted text into MP3 speech."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    text: str = Field(
+        ...,
+        description="Plain text content to convert into MP3 speech (up to 15,000 characters).",
+    )
+    language: str = Field(
+        default=DEFAULT_LANGUAGE,
+        description="Language code for speech synthesis ('es', 'en', or 'fr').",
+    )
+    engine: str = Field(
+        default=DEFAULT_ENGINE,
+        description="Speech synthesis engine ('edge' or 'elevenlabs').",
+    )
+    voice: Optional[str] = Field(
+        default=None,
+        description="Optional voice identifier compatible with the selected engine and language.",
+    )
+
+    @field_validator("text")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        """Ensure manual text is non-empty and free of null bytes."""
+        if "\x00" in value:
+            raise ValueError("El texto contiene caracteres nulos no permitidos.")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("El texto para convertir no puede estar vacío.")
+        return cleaned
+
+    @field_validator("language")
+    @classmethod
+    def validate_language_code(cls, value: str) -> str:
+        """Ensure the language code is supported by src.converter.SUPPORTED_VOICES."""
+        cleaned = value.strip().lower()
+        if cleaned not in SUPPORTED_VOICES:
+            supported_list = ", ".join(f"'{code}'" for code in SUPPORTED_VOICES)
+            raise ValueError(
+                f"Unsupported language code '{value}'. Supported languages: {supported_list}."
+            )
+        return cleaned
+
+    @field_validator("engine")
+    @classmethod
+    def validate_engine_code(cls, value: str) -> str:
+        """Ensure the synthesis engine is supported ('edge' or 'elevenlabs')."""
+        return validate_engine(value)
+
+    @model_validator(mode="after")
+    def validate_voice_compatibility(self) -> "TextTTSRequest":
+        """Ensure any provided voice identifier is valid for the selected engine and language."""
+        if self.voice is not None and not self.voice.strip():
+            self.voice = None
+        if self.voice is not None:
+            self.voice = validate_engine_voice(
+                engine=self.engine,
+                language=self.language,
+                voice=self.voice,
+            )
+        return self
+
+
 class HealthResponse(BaseModel):
     """Response schema for the health check endpoint."""
 

@@ -1,9 +1,34 @@
+import { useRef } from "react";
+
 const ELEVENLABS_QUOTA_TEXT =
   "ElevenLabs utiliza una cuota gratuita limitada de 10.000 créditos mensuales. Cada conversión consume créditos según la longitud del texto. Cuando se agote la cuota, podrás seguir utilizando Edge TTS sin coste.";
 
+const MAX_MANUAL_TEXT_CHARS = 15000;
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const kb = bytes / 1024;
+  if (kb < 1024) {
+    return `${kb.toFixed(1).replace(".", ",")} KB`;
+  }
+  const mb = kb / 1024;
+  return `${mb.toFixed(2).replace(".", ",")} MB`;
+}
+
 function ConversionForm({
+  inputMode = "url",
+  onInputModeChange,
   url,
   onUrlChange,
+  manualText = "",
+  onManualTextChange,
+  selectedFile = null,
+  onFileChange,
   engine,
   onEngineChange,
   engines = [],
@@ -15,10 +40,13 @@ function ConversionForm({
   voices = [],
   quotaNotice = "",
   isLoadingLanguages = false,
+  isSlowLanguagesLoading = false,
   languagesError = "",
   isLoading,
   onSubmit,
 }) {
+  const fileInputRef = useRef(null);
+
   const areSelectorsReady =
     !isLoadingLanguages &&
     !languagesError &&
@@ -30,8 +58,16 @@ function ConversionForm({
     Boolean(voice);
 
   const isControlDisabled = isLoading || !areSelectorsReady;
-  const isSubmitDisabled = isControlDisabled || !url.trim();
+
+  const hasValidInputForMode =
+    (inputMode === "url" && Boolean(url.trim())) ||
+    (inputMode === "text" && Boolean(manualText.trim())) ||
+    (inputMode === "file" && Boolean(selectedFile));
+
+  const isSubmitDisabled = isControlDisabled || !hasValidInputForMode;
   const showElevenLabsQuota = engine === "elevenlabs";
+  const manualCharCount = manualText.length;
+  const isManualTextOverLimit = manualCharCount > MAX_MANUAL_TEXT_CHARS;
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -41,24 +77,181 @@ function ConversionForm({
     onSubmit();
   };
 
+  const handleFileInputChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    if (onFileChange) {
+      onFileChange(file);
+    }
+  };
+
+  const handleRemoveFile = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    if (onFileChange) {
+      onFileChange(null);
+    }
+  };
+
   return (
     <form className="conversion-form" onSubmit={handleSubmit} noValidate>
-      <div className="form-group">
-        <label htmlFor="article-url" className="form-label">
-          URL del artículo
-        </label>
-        <input
-          id="article-url"
-          type="url"
-          className="form-input"
-          placeholder="https://ejemplo.com/noticia-o-articulo"
-          value={url}
-          onChange={(event) => onUrlChange(event.target.value)}
+      <div
+        className="input-mode-tabs"
+        role="tablist"
+        aria-label="Modalidad de entrada del contenido"
+      >
+        <button
+          type="button"
+          role="tab"
+          id="tab-mode-url"
+          aria-selected={inputMode === "url"}
+          aria-controls="panel-mode-url"
+          className={`mode-tab-btn ${inputMode === "url" ? "active" : ""}`}
+          onClick={() => onInputModeChange && onInputModeChange("url")}
           disabled={isLoading}
-          required
-          autoComplete="url"
-        />
+        >
+          Desde una URL
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-mode-text"
+          aria-selected={inputMode === "text"}
+          aria-controls="panel-mode-text"
+          className={`mode-tab-btn ${inputMode === "text" ? "active" : ""}`}
+          onClick={() => onInputModeChange && onInputModeChange("text")}
+          disabled={isLoading}
+        >
+          Texto manual
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-mode-file"
+          aria-selected={inputMode === "file"}
+          aria-controls="panel-mode-file"
+          className={`mode-tab-btn ${inputMode === "file" ? "active" : ""}`}
+          onClick={() => onInputModeChange && onInputModeChange("file")}
+          disabled={isLoading}
+        >
+          Subir archivo
+        </button>
       </div>
+
+      {inputMode === "url" && (
+        <div
+          id="panel-mode-url"
+          role="tabpanel"
+          aria-labelledby="tab-mode-url"
+          className="form-group"
+        >
+          <label htmlFor="article-url" className="form-label">
+            URL del artículo
+          </label>
+          <input
+            id="article-url"
+            type="url"
+            className="form-input"
+            placeholder="https://ejemplo.com/noticia-o-articulo"
+            value={url}
+            onChange={(event) => onUrlChange(event.target.value)}
+            disabled={isLoading}
+            required
+            autoComplete="url"
+          />
+        </div>
+      )}
+
+      {inputMode === "text" && (
+        <div
+          id="panel-mode-text"
+          role="tabpanel"
+          aria-labelledby="tab-mode-text"
+          className="form-group"
+        >
+          <div className="form-label-row">
+            <label htmlFor="manual-text" className="form-label">
+              Texto para convertir a audio
+            </label>
+            <span
+              className={`char-counter ${isManualTextOverLimit ? "over-limit" : ""}`}
+            >
+              {manualCharCount.toLocaleString("es-ES")} /{" "}
+              {MAX_MANUAL_TEXT_CHARS.toLocaleString("es-ES")} caracteres
+            </span>
+          </div>
+          <textarea
+            id="manual-text"
+            className={`form-textarea ${isManualTextOverLimit ? "input-error" : ""}`}
+            rows={5}
+            placeholder="Escribe o pega aquí el texto o artículo que deseas transformar en audio MP3..."
+            value={manualText}
+            onChange={(event) =>
+              onManualTextChange && onManualTextChange(event.target.value)
+            }
+            disabled={isLoading}
+            required
+          />
+        </div>
+      )}
+
+      {inputMode === "file" && (
+        <div
+          id="panel-mode-file"
+          role="tabpanel"
+          aria-labelledby="tab-mode-file"
+          className="form-group"
+        >
+          <label htmlFor="document-file" className="form-label">
+            Documento local (PDF, DOCX, TXT o EPUB · máx. 10 MB y 15.000 caracteres)
+          </label>
+
+          <input
+            ref={fileInputRef}
+            id="document-file"
+            type="file"
+            accept=".pdf,.docx,.txt,.epub,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/epub+zip"
+            className="file-input-hidden"
+            onChange={handleFileInputChange}
+            disabled={isLoading}
+          />
+
+          {!selectedFile ? (
+            <label
+              htmlFor="document-file"
+              className={`file-dropzone ${isLoading ? "disabled" : ""}`}
+            >
+              <span className="file-dropzone-title">
+                Seleccionar archivo desde tu dispositivo
+              </span>
+              <span className="file-dropzone-hint">
+                Formatos admitidos: PDF (con texto), DOCX, TXT y EPUB
+              </span>
+            </label>
+          ) : (
+            <div className="selected-file-card">
+              <div className="selected-file-details">
+                <span className="selected-file-name" title={selectedFile.name}>
+                  {selectedFile.name}
+                </span>
+                <span className="selected-file-size">
+                  {formatFileSize(selectedFile.size)}
+                </span>
+              </div>
+              <div className="selected-file-actions">
+                <button
+                  type="button"
+                  className="btn-remove-file"
+                  onClick={handleRemoveFile}
+                  disabled={isLoading}
+                >
+                  Eliminar archivo
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="selectors-grid">
         <div className="form-group selector-group">
@@ -214,7 +407,11 @@ function ConversionForm({
           aria-live="polite"
         >
           <span className="spinner spinner-dark spinner-sm" aria-hidden="true" />
-          <span>Cargando motores, idiomas y voces disponibles...</span>
+          <span>
+            {isSlowLanguagesLoading
+              ? "El servidor se está iniciando. Puede tardar unos segundos; estamos preparando la conversión."
+              : "Cargando motores, idiomas y voces disponibles..."}
+          </span>
         </div>
       )}
 

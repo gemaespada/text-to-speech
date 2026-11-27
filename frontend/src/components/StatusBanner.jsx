@@ -1,8 +1,13 @@
+const SLOW_SERVER_WAKEUP_TEXT =
+  "El servidor se está iniciando. Puede tardar unos segundos; estamos preparando la conversión.";
+
 function StatusBanner({
   status,
+  isSlowLoading = false,
   errorMessage,
   onDismissError,
   onSwitchToEdge,
+  onSwitchInputMode,
 }) {
   if (status === "idle") {
     return null;
@@ -18,10 +23,14 @@ function StatusBanner({
         <span className="spinner spinner-dark" aria-hidden="true" />
         <div className="status-content">
           <p className="status-title">
-            Procesando artículo y generando voz neuronal...
+            {isSlowLoading
+              ? SLOW_SERVER_WAKEUP_TEXT
+              : "Procesando contenido y generando voz neuronal..."}
           </p>
           <p className="status-subtitle">
-            Estamos extrayendo el texto principal y sintetizando el archivo MP3.
+            {isSlowLoading
+              ? "El servicio en la nube puede tardar unos instantes en despertar tras un periodo de inactividad. No es necesario volver a pulsar el botón."
+              : "Estamos preparando el texto y sintetizando el archivo MP3."}
           </p>
         </div>
       </div>
@@ -51,17 +60,37 @@ function StatusBanner({
           <p className="status-title">No se pudo completar la conversión</p>
           <p className="status-subtitle">
             {errorMessage ||
-              "Comprueba que la URL del artículo sea pública y vuelve a intentarlo."}
+              "Comprueba los datos introducidos y vuelve a intentarlo."}
           </p>
-          {onSwitchToEdge && (
+          {(onSwitchToEdge || onSwitchInputMode) && (
             <div className="status-actions">
-              <button
-                type="button"
-                className="btn-switch-engine"
-                onClick={onSwitchToEdge}
-              >
-                Cambiar a Edge TTS (Gratuito)
-              </button>
+              {onSwitchToEdge && (
+                <button
+                  type="button"
+                  className="btn-switch-engine"
+                  onClick={onSwitchToEdge}
+                >
+                  Cambiar a Edge TTS (Gratuito)
+                </button>
+              )}
+              {onSwitchInputMode && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-switch-engine"
+                    onClick={() => onSwitchInputMode("text")}
+                  >
+                    Usar texto manual
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-switch-engine"
+                    onClick={() => onSwitchInputMode("file")}
+                  >
+                    Subir un archivo
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

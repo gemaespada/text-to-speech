@@ -5,4 +5,8 @@ aiohttp
 requests
 fastapi
 uvicorn
+python-multipart
+pypdf
+python-docx
+pytest
 lxml<5.2.0

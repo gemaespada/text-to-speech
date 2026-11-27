@@ -10,6 +10,13 @@ const API_BASE_URL = RAW_API_BASE_URL.trim()
   .replace(/\/+$/, "")
   .replace(/\/api$/i, "");
 
+const MAX_TEXT_CHARS = 15000;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_FILE_EXTENSIONS = [".pdf", ".docx", ".txt", ".epub"];
+const SLOW_LOADING_THRESHOLD_MS = 4000;
+const CONVERSION_TIMEOUT_MS = 120000;
+const LANGUAGES_TIMEOUT_MS = 65000;
+
 /**
  * Construye la URL completa del endpoint de la API utilizando VITE_API_BASE_URL
  * en producción, o manteniendo la ruta relativa `/api/...` en desarrollo local
@@ -23,12 +30,12 @@ function buildApiUrl(endpointPath) {
 }
 
 const FALLBACK_STATUS_MESSAGES = {
-  400: "La petición o la URL proporcionada no es válida. Asegúrate de que sea un artículo público con texto legible.",
+  400: "No se ha podido procesar el contenido proporcionado. Verifica los datos e inténtalo de nuevo.",
   401: "La clave ELEVENLABS_API_KEY no es válida o no está autorizada. Revisa tu configuración o cambia a Edge TTS.",
   402: "La cuota de créditos de ElevenLabs se ha agotado o la voz seleccionada requiere un plan de pago. Puedes cambiar a Edge TTS sin coste.",
   403: "ElevenLabs ha rechazado la petición desde este entorno. Puedes cambiar al motor gratuito Edge TTS.",
-  413: "El artículo o la página web supera el tamaño máximo permitido para la conversión (15.000 caracteres / 5 MB HTML).",
-  422: "Los datos enviados no son válidos. Revisa la URL, el motor, el idioma y la voz seleccionados.",
+  413: "El contenido supera el límite máximo permitido (15.000 caracteres de texto o 10 MB de archivo).",
+  422: "Los datos enviados no son válidos. Revisa el contenido, el motor, el idioma y la voz seleccionados.",
   429: "Se ha alcanzado el límite de peticiones permitidas. Espera unos segundos antes de intentarlo de nuevo.",
   502: "No ha sido posible descargar el artículo o conectar con el proveedor de síntesis de voz.",
   503: "El motor de síntesis seleccionado no está disponible o no tiene configurada su clave API.",
@@ -85,6 +92,70 @@ function validateArticleUrl(rawUrl) {
   }
 }
 
+function validateManualText(rawText) {
+  const trimmed = (rawText || "").trim();
+  if (!trimmed) {
+    return {
+      isValid: false,
+      cleanedText: "",
+      error: "Introduce o pega el texto que deseas convertir a audio.",
+    };
+  }
+
+  if (trimmed.length > MAX_TEXT_CHARS) {
+    return {
+      isValid: false,
+      cleanedText: "",
+      error: `El texto introducido (${trimmed.length.toLocaleString("es-ES")} caracteres) supera el límite máximo de ${MAX_TEXT_CHARS.toLocaleString("es-ES")} caracteres.`,
+    };
+  }
+
+  return {
+    isValid: true,
+    cleanedText: trimmed,
+    error: "",
+  };
+}
+
+function validateSelectedFile(file) {
+  if (!file) {
+    return {
+      isValid: false,
+      error: "Selecciona un archivo (.pdf, .docx, .txt o .epub) desde tu dispositivo.",
+    };
+  }
+
+  const fileName = (file.name || "").trim();
+  const dotIndex = fileName.lastIndexOf(".");
+  const ext = dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : "";
+
+  if (!ALLOWED_FILE_EXTENSIONS.includes(ext)) {
+    return {
+      isValid: false,
+      error: `El formato del archivo ('${ext || "sin extensión"}') no es compatible. Formatos admitidos: PDF, DOCX, TXT y EPUB.`,
+    };
+  }
+
+  if (file.size === 0) {
+    return {
+      isValid: false,
+      error: "El archivo seleccionado está vacío (0 bytes).",
+    };
+  }
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return {
+      isValid: false,
+      error: "El archivo seleccionado supera el tamaño máximo permitido de 10 MB.",
+    };
+  }
+
+  return {
+    isValid: true,
+    error: "",
+  };
+}
+
 function extractHostnameLabel(articleUrl) {
   try {
     const { hostname } = new URL(articleUrl);
@@ -94,13 +165,18 @@ function extractHostnameLabel(articleUrl) {
   }
 }
 
-function buildDownloadFilename(articleUrl, engineId, languageCode) {
-  const hostSlug = extractHostnameLabel(articleUrl)
+function slugifyLabel(rawLabel) {
+  const slug = (rawLabel || "")
     .toLowerCase()
+    .replace(/\.[^.]+$/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const safeHost = hostSlug || "articulo";
-  return `article-${safeHost}-${engineId}-${languageCode}.mp3`;
+  return slug.slice(0, 36) || "audio";
+}
+
+function buildDownloadFilename(sourceLabel, engineId, languageCode) {
+  const safeSlug = slugifyLabel(sourceLabel);
+  return `tts-${safeSlug}-${engineId}-${languageCode}.mp3`;
 }
 
 /**
@@ -122,7 +198,6 @@ function normalizeEnginesCatalog(data) {
     }
   }
 
-  // Compatibilidad hacia atrás si solo se recibe `languages` plano
   const legacyLanguages = Array.isArray(data?.languages)
     ? data.languages.filter(
         (item) =>
@@ -166,11 +241,11 @@ function normalizeEnginesCatalog(data) {
 }
 
 /**
- * Interpreta los errores HTTP devueltos por FastAPI en POST /api/tts.
+ * Interpreta los errores HTTP devueltos por FastAPI.
  * Extrae el campo `detail` del cuerpo JSON cuando está disponible y lo
  * presenta de forma comprensible sin exponer trazas internas.
  */
-async function extractTtsErrorMessage(response) {
+async function extractTtsErrorMessage(response, mode) {
   const statusFallback =
     FALLBACK_STATUS_MESSAGES[response.status] ||
     "No se ha podido completar la conversión de audio. Inténtalo de nuevo.";
@@ -185,14 +260,26 @@ async function extractTtsErrorMessage(response) {
 
     if (typeof payload?.detail === "string" && payload.detail.trim()) {
       const detailText = payload.detail.trim();
-      // Si el backend ya devuelve un mensaje explicativo en castellano (como los errores de ElevenLabs), lo mostramos directamente
       if (
         /[áéíóúñ¿¡]/i.test(detailText) ||
         detailText.includes("ElevenLabs") ||
-        detailText.includes("Edge TTS")
+        detailText.includes("Edge TTS") ||
+        detailText.includes("PDF") ||
+        detailText.includes("DOCX") ||
+        detailText.includes("EPUB") ||
+        detailText.includes("archivo")
       ) {
         return detailText;
       }
+
+      if (mode === "url" && (response.status === 400 || response.status === 502)) {
+        return "No se ha podido extraer el contenido del artículo desde esa URL (la página puede bloquear la extracción automática o no contener texto legible). Puedes cambiar a «Texto manual» o «Subir archivo» conservando tu configuración de voz.";
+      }
+
+      if (response.status === 413) {
+        return "El contenido extraído supera el límite máximo permitido de 15.000 caracteres.";
+      }
+
       return `${statusFallback} (${detailText})`;
     }
 
@@ -211,21 +298,41 @@ async function extractTtsErrorMessage(response) {
 }
 
 function App() {
+  const [inputMode, setInputMode] = useState("url");
   const [url, setUrl] = useState("");
+  const [manualText, setManualText] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+
   const [engines, setEngines] = useState([]);
   const [engine, setEngine] = useState("");
   const [language, setLanguage] = useState("");
   const [voice, setVoice] = useState("");
   const [isLoadingLanguages, setIsLoadingLanguages] = useState(true);
+  const [isSlowLanguagesLoading, setIsSlowLanguagesLoading] = useState(false);
   const [languagesError, setLanguagesError] = useState("");
 
   const [status, setStatus] = useState("idle");
+  const [isSlowLoading, setIsSlowLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [failedEngine, setFailedEngine] = useState("");
+  const [failedInputMode, setFailedInputMode] = useState("");
   const [result, setResult] = useState(null);
 
   const activeAudioUrlRef = useRef(null);
   const ttsAbortControllerRef = useRef(null);
+  const slowConversionTimerRef = useRef(null);
+  const conversionTimeoutTimerRef = useRef(null);
+
+  const clearConversionTimers = () => {
+    if (slowConversionTimerRef.current) {
+      clearTimeout(slowConversionTimerRef.current);
+      slowConversionTimerRef.current = null;
+    }
+    if (conversionTimeoutTimerRef.current) {
+      clearTimeout(conversionTimeoutTimerRef.current);
+      conversionTimeoutTimerRef.current = null;
+    }
+  };
 
   /**
    * Sustituye de forma segura el Object URL de audio activo, revocando
@@ -241,6 +348,7 @@ function App() {
 
   useEffect(() => {
     return () => {
+      clearConversionTimers();
       if (ttsAbortControllerRef.current) {
         ttsAbortControllerRef.current.abort();
         ttsAbortControllerRef.current = null;
@@ -251,9 +359,22 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let timedOut = false;
+
+    const slowTimer = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        setIsSlowLanguagesLoading(true);
+      }
+    }, SLOW_LOADING_THRESHOLD_MS);
+
+    const maxWaitTimer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, LANGUAGES_TIMEOUT_MS);
 
     async function loadLanguages() {
       setIsLoadingLanguages(true);
+      setIsSlowLanguagesLoading(false);
       setLanguagesError("");
 
       try {
@@ -300,8 +421,9 @@ function App() {
         setLanguage(initialLangObj.code);
         setVoice(initialVoiceId);
         setIsLoadingLanguages(false);
+        setIsSlowLanguagesLoading(false);
       } catch (error) {
-        if (controller.signal.aborted || error?.name === "AbortError") {
+        if (controller.signal.aborted && !timedOut) {
           return;
         }
 
@@ -310,15 +432,23 @@ function App() {
         setLanguage("");
         setVoice("");
         setLanguagesError(
-          "No se han podido cargar los motores e idiomas disponibles. Comprueba que el servidor backend esté activo."
+          timedOut
+            ? "El servidor ha tardado demasiado tiempo en responder al iniciarse. Recarga la página en unos segundos."
+            : "No se han podido cargar los motores e idiomas disponibles. Comprueba que el servidor backend esté activo."
         );
         setIsLoadingLanguages(false);
+        setIsSlowLanguagesLoading(false);
+      } finally {
+        clearTimeout(slowTimer);
+        clearTimeout(maxWaitTimer);
       }
     }
 
     loadLanguages();
 
     return () => {
+      clearTimeout(slowTimer);
+      clearTimeout(maxWaitTimer);
       controller.abort();
     };
   }, []);
@@ -345,6 +475,18 @@ function App() {
     () => currentLanguageObj?.voices || [],
     [currentLanguageObj]
   );
+
+  const handleInputModeChange = (nextMode) => {
+    if (status === "loading") {
+      return;
+    }
+    setInputMode(nextMode);
+    if (status === "error") {
+      setFailedInputMode("");
+      setErrorMessage("");
+      setStatus("idle");
+    }
+  };
 
   const handleEngineChange = (nextEngineId) => {
     const targetEngine = engines.find((item) => item.id === nextEngineId);
@@ -392,6 +534,7 @@ function App() {
   const handleManualSwitchToEdge = () => {
     handleEngineChange("edge");
     setFailedEngine("");
+    setFailedInputMode("");
     setErrorMessage("");
     setStatus("idle");
   };
@@ -408,53 +551,131 @@ function App() {
       return;
     }
 
-    const validation = validateArticleUrl(url);
-    if (!validation.isValid) {
-      setFailedEngine("");
-      setErrorMessage(validation.error);
-      setStatus("error");
-      return;
-    }
-
-    const submittedUrl = validation.normalizedUrl;
+    const submittedMode = inputMode;
     const submittedEngine = currentEngineObj;
     const submittedLanguage = currentLanguageObj;
     const submittedVoice =
       availableVoices.find((item) => item.id === voice) ||
       availableVoices[0] || { id: voice, name: voice };
 
+    let endpointPath = "/api/tts";
+    let fetchHeaders = { Accept: "audio/mpeg" };
+    let fetchBody = null;
+    let resultTitle = "";
+    let resultSourceLabel = "";
+    let downloadSlugSource = "";
+
+    if (submittedMode === "url") {
+      const validation = validateArticleUrl(url);
+      if (!validation.isValid) {
+        setFailedEngine("");
+        setFailedInputMode("");
+        setErrorMessage(validation.error);
+        setStatus("error");
+        return;
+      }
+      const hostLabel = extractHostnameLabel(validation.normalizedUrl);
+      endpointPath = "/api/tts";
+      fetchHeaders["Content-Type"] = "application/json";
+      fetchBody = JSON.stringify({
+        url: validation.normalizedUrl,
+        engine: submittedEngine.id,
+        language: submittedLanguage.code,
+        voice: submittedVoice.id,
+      });
+      resultTitle = `Artículo convertido · ${hostLabel}`;
+      resultSourceLabel = validation.normalizedUrl;
+      downloadSlugSource = hostLabel;
+    } else if (submittedMode === "text") {
+      const validation = validateManualText(manualText);
+      if (!validation.isValid) {
+        setFailedEngine("");
+        setFailedInputMode("");
+        setErrorMessage(validation.error);
+        setStatus("error");
+        return;
+      }
+      endpointPath = "/api/tts/text";
+      fetchHeaders["Content-Type"] = "application/json";
+      fetchBody = JSON.stringify({
+        text: validation.cleanedText,
+        engine: submittedEngine.id,
+        language: submittedLanguage.code,
+        voice: submittedVoice.id,
+      });
+      const previewSnippet =
+        validation.cleanedText.length > 60
+          ? `${validation.cleanedText.slice(0, 60)}...`
+          : validation.cleanedText;
+      resultTitle = "Texto manual convertido a audio";
+      resultSourceLabel = `Texto manual (${validation.cleanedText.length.toLocaleString("es-ES")} caracteres): "${previewSnippet}"`;
+      downloadSlugSource = "texto-manual";
+    } else if (submittedMode === "file") {
+      const validation = validateSelectedFile(selectedFile);
+      if (!validation.isValid) {
+        setFailedEngine("");
+        setFailedInputMode("");
+        setErrorMessage(validation.error);
+        setStatus("error");
+        return;
+      }
+      endpointPath = "/api/tts/file";
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("engine", submittedEngine.id);
+      formData.append("language", submittedLanguage.code);
+      formData.append("voice", submittedVoice.id);
+      fetchBody = formData;
+      resultTitle = `Documento convertido · ${selectedFile.name}`;
+      resultSourceLabel = `Archivo local: ${selectedFile.name}`;
+      downloadSlugSource = selectedFile.name;
+    } else {
+      return;
+    }
+
+    clearConversionTimers();
     if (ttsAbortControllerRef.current) {
       ttsAbortControllerRef.current.abort();
     }
     const controller = new AbortController();
     ttsAbortControllerRef.current = controller;
+    let requestTimedOut = false;
 
     setFailedEngine("");
+    setFailedInputMode("");
     setErrorMessage("");
+    setIsSlowLoading(false);
     setStatus("loading");
 
+    slowConversionTimerRef.current = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        setIsSlowLoading(true);
+      }
+    }, SLOW_LOADING_THRESHOLD_MS);
+
+    conversionTimeoutTimerRef.current = setTimeout(() => {
+      requestTimedOut = true;
+      controller.abort();
+    }, CONVERSION_TIMEOUT_MS);
+
     try {
-      const response = await fetch(buildApiUrl("/api/tts"), {
+      const response = await fetch(buildApiUrl(endpointPath), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "audio/mpeg",
-        },
-        body: JSON.stringify({
-          url: submittedUrl,
-          engine: submittedEngine.id,
-          language: submittedLanguage.code,
-          voice: submittedVoice.id,
-        }),
+        headers: fetchHeaders,
+        body: fetchBody,
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        const apiErrorMessage = await extractTtsErrorMessage(response);
+        const apiErrorMessage = await extractTtsErrorMessage(
+          response,
+          submittedMode
+        );
         if (controller.signal.aborted) {
           return;
         }
         setFailedEngine(submittedEngine.id);
+        setFailedInputMode(submittedMode);
         setErrorMessage(apiErrorMessage);
         setStatus("error");
         return;
@@ -476,6 +697,7 @@ function App() {
 
       if (!isMp3Audio || audioBlob.size === 0) {
         setFailedEngine(submittedEngine.id);
+        setFailedInputMode(submittedMode);
         setErrorMessage(
           "La respuesta recibida del servidor no contiene un archivo de audio MP3 válido."
         );
@@ -486,10 +708,9 @@ function App() {
       const nextAudioUrl = URL.createObjectURL(audioBlob);
       replaceAudioObjectUrl(nextAudioUrl);
 
-      const hostLabel = extractHostnameLabel(submittedUrl);
       setResult({
-        title: `Artículo convertido · ${hostLabel}`,
-        sourceUrl: submittedUrl,
+        title: resultTitle,
+        sourceUrl: resultSourceLabel,
         engineId: submittedEngine.id,
         engineName: submittedEngine.name,
         languageCode: submittedLanguage.code,
@@ -497,7 +718,7 @@ function App() {
         voice: submittedVoice.id,
         voiceName: submittedVoice.name,
         filename: buildDownloadFilename(
-          submittedUrl,
+          downloadSlugSource,
           submittedEngine.id,
           submittedLanguage.code
         ),
@@ -505,18 +726,28 @@ function App() {
       });
       setStatus("success");
     } catch (error) {
-      if (controller.signal.aborted || error?.name === "AbortError") {
+      if (controller.signal.aborted && !requestTimedOut) {
         return;
       }
 
       setFailedEngine(submittedEngine.id);
-      setErrorMessage(
-        submittedEngine.id === "elevenlabs"
-          ? "No se ha podido completar la conexión con el servidor durante la conversión con ElevenLabs. Puedes volver a intentarlo o cambiar manualmente a Edge TTS."
-          : "No se ha podido establecer conexión con el servidor para generar el audio. Comprueba que el backend esté activo."
-      );
+      setFailedInputMode(submittedMode);
+
+      if (requestTimedOut) {
+        setErrorMessage(
+          "El servidor ha superado el tiempo máximo de espera (120 s). Si el servicio estaba suspendido por inactividad, ya debería estar terminando de arrancar; espera unos segundos y vuelve a intentarlo."
+        );
+      } else {
+        setErrorMessage(
+          submittedEngine.id === "elevenlabs"
+            ? "No se ha podido completar la conexión con el servidor durante la conversión con ElevenLabs. Puedes volver a intentarlo o cambiar manualmente a Edge TTS."
+            : "No se ha podido establecer conexión con el servidor para generar el audio. Comprueba que el backend esté activo."
+        );
+      }
       setStatus("error");
     } finally {
+      clearConversionTimers();
+      setIsSlowLoading(false);
       if (ttsAbortControllerRef.current === controller) {
         ttsAbortControllerRef.current = null;
       }
@@ -528,6 +759,9 @@ function App() {
     (failedEngine === "elevenlabs" || engine === "elevenlabs") &&
     engines.some((item) => item.id === "edge");
 
+  const canOfferAlternativeModeSwitch =
+    status === "error" && failedInputMode === "url" && inputMode === "url";
+
   return (
     <div className="app-shell">
       <Header />
@@ -538,8 +772,14 @@ function App() {
         <div className="workspace-panel">
           <div className="main-card">
             <ConversionForm
+              inputMode={inputMode}
+              onInputModeChange={handleInputModeChange}
               url={url}
               onUrlChange={setUrl}
+              manualText={manualText}
+              onManualTextChange={setManualText}
+              selectedFile={selectedFile}
+              onFileChange={setSelectedFile}
               engine={engine}
               onEngineChange={handleEngineChange}
               engines={engines}
@@ -551,6 +791,7 @@ function App() {
               voices={availableVoices}
               quotaNotice={currentEngineObj?.quota_notice || ""}
               isLoadingLanguages={isLoadingLanguages}
+              isSlowLanguagesLoading={isSlowLanguagesLoading}
               languagesError={languagesError}
               isLoading={status === "loading"}
               onSubmit={handleConvertSubmit}
@@ -558,13 +799,18 @@ function App() {
 
             <StatusBanner
               status={status}
+              isSlowLoading={isSlowLoading}
               errorMessage={errorMessage}
               onDismissError={() => {
                 setFailedEngine("");
+                setFailedInputMode("");
                 setStatus("idle");
               }}
               onSwitchToEdge={
                 canOfferEdgeSwitch ? handleManualSwitchToEdge : null
+              }
+              onSwitchInputMode={
+                canOfferAlternativeModeSwitch ? handleInputModeChange : null
               }
             />
           </div>
